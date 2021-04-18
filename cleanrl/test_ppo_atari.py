@@ -354,7 +354,7 @@ if __name__ == "__main__":
     # Algorithm specific arguments
     parser.add_argument('--n-minibatch', type=int, default=4,
                         help='the number of mini batch')
-    parser.add_argument('--num-envs', type=int, default=8,
+    parser.add_argument('--num-envs', type=int, default=1,
                         help='the number of parallel game environment')
     parser.add_argument('--num-steps', type=int, default=128,
                         help='the number of steps per game environment')
@@ -512,20 +512,13 @@ class Agent(nn.Module):
 agent = Agent(envs).to(device)
 print(f"device: {device}")
 print(f"net:\n", agent)
-optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
-if args.anneal_lr:
-    # https://github.com/openai/baselines/blob/ea25b9e8b234e6ee1bca43083f8f3cf974143998/baselines/ppo2/defaults.py#L20
-    lr = lambda f: f * args.learning_rate
 
-global_step = 0
 ckpt = args.ckpt
 if ckpt:
     ckpt_load_path = f"results/{args.gym_id}_dqn_{ckpt.split(':')[0]}/checkponits/ckpt_{ckpt.split(':')[1]}.pth"
     print(f"load checkpoint path: {ckpt_load_path}")
     checkpoint = torch.load(ckpt_load_path)
     agent.load_state_dict(checkpoint['net'])
-    optimizer.load_state_dict(checkpoint['optimizer'])
-    global_step = checkpoint['global_step']
     print(f"load checkpoint done")
 
 
@@ -541,148 +534,19 @@ values = torch.zeros((args.num_steps, args.num_envs)).to(device)
 # Note how `next_obs` and `next_done` are used; their usage is equivalent to
 # https://github.com/ikostrikov/pytorch-a2c-ppo-acktr-gail/blob/84a7582477fb0d5c82ad6d850fe476829dddd2e1/a2c_ppo_acktr/storage.py#L60
 next_obs = envs.reset()
-next_done = torch.zeros(args.num_envs).to(device)
-num_updates = args.total_timesteps // args.batch_size
-for update in range(1, num_updates+1):
-    # Annealing the rate if instructed to do so.
-    if args.anneal_lr:
-        frac = 1.0 - (update - 1.0) / num_updates
-        lrnow = lr(frac)
-        optimizer.param_groups[0]['lr'] = lrnow
-
-    # TRY NOT TO MODIFY: prepare the execution of the game.
-    for step in range(0, args.num_steps):
-        global_step += 1 * args.num_envs
-        obs[step] = next_obs
-        dones[step] = next_done
-
-        # ALGO LOGIC: put action logic here
-        with torch.no_grad():
-            values[step] = agent.get_value(obs[step]).flatten()
-            action, logproba, _ = agent.get_action(obs[step])
-
-        actions[step] = action
-        logprobs[step] = logproba
-
-        # TRY NOT TO MODIFY: execute the game and log data.
-        next_obs, rs, ds, infos = envs.step(action)
-        rewards[step], next_done = rs.view(-1), torch.Tensor(ds).to(device)
-
-        for info in infos:
-            if 'episode' in info.keys():
-                print(f"global_step={global_step}, episode_reward={info['episode']['r']}")
-                writer.add_scalar("charts/episode_reward", info['episode']['r'], global_step)
-                break
-
-    # bootstrap reward if not done. reached the batch limit
+done = False
+total_reward = 0
+step = 0
+while not done:
+    envs.render()
+    obs = next_obs
+    step += 1 * args.num_envs
     with torch.no_grad():
-        last_value = agent.get_value(next_obs.to(device)).reshape(1, -1)
-        if args.gae:
-            advantages = torch.zeros_like(rewards).to(device)
-            lastgaelam = 0
-            for t in reversed(range(args.num_steps)):
-                if t == args.num_steps - 1:
-                    nextnonterminal = 1.0 - next_done
-                    nextvalues = last_value
-                else:
-                    nextnonterminal = 1.0 - dones[t+1]
-                    nextvalues = values[t+1]
-                delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
-                advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
-            returns = advantages + values
-        else:
-            returns = torch.zeros_like(rewards).to(device)
-            for t in reversed(range(args.num_steps)):
-                if t == args.num_steps - 1:
-                    nextnonterminal = 1.0 - next_done
-                    next_return = last_value
-                else:
-                    nextnonterminal = 1.0 - dones[t+1]
-                    next_return = returns[t+1]
-                returns[t] = rewards[t] + args.gamma * nextnonterminal * next_return
-            advantages = returns - values
+        action, logproba, _ = agent.get_action(obs)
+    next_obs, reward, done, infos = envs.step(action)
+    total_reward += reward
 
-    # flatten the batch
-    b_obs = obs.reshape((-1,)+envs.observation_space.shape)
-    b_logprobs = logprobs.reshape(-1)
-    b_actions = actions.reshape((-1,)+envs.action_space.shape)
-    b_advantages = advantages.reshape(-1)
-    b_returns = returns.reshape(-1)
-    b_values = values.reshape(-1)
+print(f"total_step: {step}. total_reward: {total_reward}")
 
-    # Optimizaing the policy and value network
-    target_agent = Agent(envs).to(device)
-    inds = np.arange(args.batch_size,)
-    for i_epoch_pi in range(args.update_epochs):
-        np.random.shuffle(inds)
-        target_agent.load_state_dict(agent.state_dict())
-        for start in range(0, args.batch_size, args.minibatch_size):
-            end = start + args.minibatch_size
-            minibatch_ind = inds[start:end]
-            mb_advantages = b_advantages[minibatch_ind]
-            if args.norm_adv:
-                mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
-
-            _, newlogproba, entropy = agent.get_action(b_obs[minibatch_ind], b_actions.long()[minibatch_ind])
-            ratio = (newlogproba - b_logprobs[minibatch_ind]).exp()
-
-            # Stats
-            approx_kl = (b_logprobs[minibatch_ind] - newlogproba).mean()
-
-            # Policy loss
-            pg_loss1 = -mb_advantages * ratio
-            pg_loss2 = -mb_advantages * torch.clamp(ratio, 1-args.clip_coef, 1+args.clip_coef)
-            pg_loss = torch.max(pg_loss1, pg_loss2).mean()
-            entropy_loss = entropy.mean()
-
-            # Value loss
-            new_values = agent.get_value(b_obs[minibatch_ind]).view(-1)
-            if args.clip_vloss:
-                v_loss_unclipped = ((new_values - b_returns[minibatch_ind]) ** 2)
-                v_clipped = b_values[minibatch_ind] + torch.clamp(new_values - b_values[minibatch_ind], -args.clip_coef, args.clip_coef)
-                v_loss_clipped = (v_clipped - b_returns[minibatch_ind])**2
-                v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
-                v_loss = 0.5 * v_loss_max.mean()
-            else:
-                v_loss = 0.5 * ((new_values - b_returns[minibatch_ind]) ** 2).mean()
-
-            loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
-
-            optimizer.zero_grad()
-            loss.backward()
-            nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
-            optimizer.step()
-
-        if args.kle_stop:
-            if approx_kl > args.target_kl:
-                break
-        if args.kle_rollback:
-            if (b_logprobs[minibatch_ind] - agent.get_action(b_obs[minibatch_ind], b_actions.long()[minibatch_ind])[1]).mean() > args.target_kl:
-                agent.load_state_dict(target_agent.state_dict())
-                break
-    if global_step % ckpt_save_frequency == 0:
-        checkpoint = {
-                "net": q_network.state_dict(),
-                "optimizer": optimizer.state_dict(),
-                "global_step": global_step
-                }
-        torch.save(checkpoint, ckpt_save_path + f"/ckpt_{global_step}.pth")
-
-    # TRY NOT TO MODIFY: record rewards for plotting purposes
-    writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]['lr'], global_step)
-    writer.add_scalar("losses/value_loss", v_loss.item(), global_step)
-    writer.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
-    writer.add_scalar("losses/entropy", entropy.mean().item(), global_step)
-    writer.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
-    if args.kle_stop or args.kle_rollback:
-        writer.add_scalar("debug/pg_stop_iter", i_epoch_pi, global_step)
-
-checkpoint = {
-        "net": q_network.state_dict(),
-        "optimizer": optimizer.state_dict(),
-        "global_step": global_step
-        }
-torch.save(checkpoint, ckpt_save_path + f"/ckpt_{global_step}.pth")
 
 envs.close()
-writer.close()
