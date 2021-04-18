@@ -427,7 +427,8 @@ if args.prod_mode:
 
 ckpt_save_path = f"results/{experiment_name}/checkponits"
 os.makedirs(ckpt_save_path, exist_ok=True)
-ckpt_save_frequency = args.total_timesteps / 100
+ckpt_save_frequency = args.total_timesteps / (100 * args.num_envs)
+print(f"ckpt_save_frequency: {ckpt_save_frequency}")
 
 # TRY NOT TO MODIFY: seeding
 device = torch.device('cuda' if torch.cuda.is_available() and args.cuda else 'cpu')
