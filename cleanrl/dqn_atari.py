@@ -357,7 +357,7 @@ if __name__ == "__main__":
                         help="the timesteps it takes to update the target network")
     parser.add_argument('--max-grad-norm', type=float, default=0.5,
                         help='the maximum norm for the gradient clipping')
-    parser.add_argument('--batch-size', type=int, default=4, # 32,
+    parser.add_argument('--batch-size', type=int, default=32,
                         help="the batch size of sample from the reply memory")
     parser.add_argument('--start-e', type=float, default=1.,
                         help="the starting epsilon for exploration")
@@ -365,7 +365,7 @@ if __name__ == "__main__":
                         help="the ending epsilon for exploration")
     parser.add_argument('--exploration-fraction', type=float, default=0.10,
                         help="the fraction of `total-timesteps` it takes from start-e to go end-e")
-    parser.add_argument('--learning-starts', type=int, default=8, # 80000,
+    parser.add_argument('--learning-starts', type=int, default=80000,
                         help="timestep to start learning")
     parser.add_argument('--train-frequency', type=int, default=4,
                         help="the frequency of training")
