@@ -345,7 +345,9 @@ if __name__ == "__main__":
                         help="the wandb's project name")
     parser.add_argument('--wandb-entity', type=str, default=None,
                         help="the entity (team) of wandb's project")
-    
+    parser.add_argument('--ckpt', type=str, default=None,
+                        help="load checkpoint path")
+
     # Algorithm specific arguments
     parser.add_argument('--buffer-size', type=int, default=1000000,
                          help='the replay memory buffer size')
@@ -355,7 +357,7 @@ if __name__ == "__main__":
                         help="the timesteps it takes to update the target network")
     parser.add_argument('--max-grad-norm', type=float, default=0.5,
                         help='the maximum norm for the gradient clipping')
-    parser.add_argument('--batch-size', type=int, default=32,
+    parser.add_argument('--batch-size', type=int, default=4, # 32,
                         help="the batch size of sample from the reply memory")
     parser.add_argument('--start-e', type=float, default=1.,
                         help="the starting epsilon for exploration")
@@ -363,7 +365,7 @@ if __name__ == "__main__":
                         help="the ending epsilon for exploration")
     parser.add_argument('--exploration-fraction', type=float, default=0.10,
                         help="the fraction of `total-timesteps` it takes from start-e to go end-e")
-    parser.add_argument('--learning-starts', type=int, default=80000,
+    parser.add_argument('--learning-starts', type=int, default=8, # 80000,
                         help="timestep to start learning")
     parser.add_argument('--train-frequency', type=int, default=4,
                         help="the frequency of training")
@@ -372,14 +374,18 @@ if __name__ == "__main__":
         args.seed = int(time.time())
 
 # TRY NOT TO MODIFY: setup the environment
-experiment_name = f"{args.gym_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
-writer = SummaryWriter(f"runs/{experiment_name}")
+now_time = time.strftime("%Y%m%d%H%M%S", time.localtime())
+experiment_name = f"{args.gym_id}_dqn_{now_time}"
+writer = SummaryWriter(f"results/{experiment_name}/logs")
 writer.add_text('hyperparameters', "|param|value|\n|-|-|\n%s" % (
         '\n'.join([f"|{key}|{value}|" for key, value in vars(args).items()])))
 if args.prod_mode:
     import wandb
     wandb.init(project=args.wandb_project_name, entity=args.wandb_entity, sync_tensorboard=True, config=vars(args), name=experiment_name, monitor_gym=True, save_code=True)
     writer = SummaryWriter(f"/tmp/{experiment_name}")
+
+ckpt_save_path = f"results/{experiment_name}/checkponits"
+os.makedirs(ckpt_save_path, exist_ok=True)
 
 # TRY NOT TO MODIFY: seeding
 device = torch.device('cuda' if torch.cuda.is_available() and args.cuda else 'cpu')
@@ -408,14 +414,14 @@ assert isinstance(env.action_space, Discrete), "only discrete action space is su
 class ReplayBuffer():
     def __init__(self, buffer_limit):
         self.buffer = collections.deque(maxlen=buffer_limit)
-    
+
     def put(self, transition):
         self.buffer.append(transition)
-    
+
     def sample(self, n):
         mini_batch = random.sample(self.buffer, n)
         s_lst, a_lst, r_lst, s_prime_lst, done_mask_lst = [], [], [], [], []
-        
+
         for transition in mini_batch:
             s, a, r, s_prime, done_mask = transition
             s_lst.append(s)
@@ -470,10 +476,23 @@ loss_fn = nn.MSELoss()
 print(device.__repr__())
 print(q_network)
 
+start_step = -1
+ckpt = args.ckpt
+if ckpt:
+    ckpt_load_path = f"results/{args.gym_id}_dqn_{ckpt.split(':')[0]}/checkponits/ckpt_{ckpt.split(':')[1]}.pth"
+    print(f"load checkpoint path: {ckpt_load_path}")
+    checkpoint = torch.load(ckpt_load_path)
+    q_network.load_state_dict(checkpoint['net'])
+    target_network.load_state_dict(checkpoint['net'])
+    optimizer.load_state_dict(checkpoint['optimizer'])
+    start_step = checkpoint['global_step']
+    print(f"load checkpoint done")
+
+
 # TRY NOT TO MODIFY: start the game
 obs = env.reset()
 episode_reward = 0
-for global_step in range(args.total_timesteps):
+for global_step in range(start_step+1, args.total_timesteps):
     # ALGO LOGIC: put action logic here
     epsilon = linear_schedule(args.start_e, args.end_e, args.exploration_fraction*args.total_timesteps, global_step)
     obs = np.array(obs)
@@ -486,7 +505,7 @@ for global_step in range(args.total_timesteps):
     # TRY NOT TO MODIFY: execute the game and log data.
     next_obs, reward, done, info = env.step(action)
     episode_reward += reward
-    
+
     # TRY NOT TO MODIFY: record rewards for plotting purposes
     if 'episode' in info.keys():
         print(f"global_step={global_step}, episode_reward={info['episode']['r']}")
@@ -502,7 +521,7 @@ for global_step in range(args.total_timesteps):
             td_target = torch.Tensor(s_rewards).to(device) + args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
         old_val = q_network.forward(s_obs, device).gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
         loss = loss_fn(td_target, old_val)
-        
+
         if global_step % 100 == 0:
             writer.add_scalar("losses/td_loss", loss, global_step)
 
@@ -515,6 +534,12 @@ for global_step in range(args.total_timesteps):
         # update the target network
         if global_step % args.target_network_frequency == 0:
             target_network.load_state_dict(q_network.state_dict())
+            checkpoint = {
+                    "net": q_network.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "global_step": global_step
+                    }
+            torch.save(checkpoint, ckpt_save_path + f"/ckpt_{global_step}.pth")
 
     # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
     obs = next_obs
@@ -522,6 +547,7 @@ for global_step in range(args.total_timesteps):
         # important to note that because `EpisodicLifeEnv` wrapper is applied,
         # the real episode reward is actually the sum of episode reward of 5 lives
         # which we record through `info['episode']['r']` provided by gym.wrappers.RecordEpisodeStatistics
+        writer.add_scalar("charts/done_reward", epsilon, global_step)
         obs, episode_reward = env.reset(), 0
 
 env.close()
