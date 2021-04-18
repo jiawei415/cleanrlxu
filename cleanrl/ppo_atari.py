@@ -334,7 +334,7 @@ if __name__ == "__main__":
                         help='the learning rate of the optimizer')
     parser.add_argument('--seed', type=int, default=1,
                         help='seed of the experiment')
-    parser.add_argument('--total-timesteps', type=int, default=10000000,
+    parser.add_argument('--total-timesteps', type=int, default=3000000,
                         help='total timesteps of the experiments')
     parser.add_argument('--torch-deterministic', type=lambda x:bool(strtobool(x)), default=True, nargs='?', const=True,
                         help='if toggled, `torch.backends.cudnn.deterministic=False`')
@@ -544,6 +544,7 @@ values = torch.zeros((args.num_steps, args.num_envs)).to(device)
 next_obs = envs.reset()
 next_done = torch.zeros(args.num_envs).to(device)
 num_updates = args.total_timesteps // args.batch_size
+last_reward = float("-inf")
 for update in range(1, num_updates+1):
     # Annealing the rate if instructed to do so.
     if args.anneal_lr:
@@ -572,6 +573,18 @@ for update in range(1, num_updates+1):
         for info in infos:
             if 'episode' in info.keys():
                 print(f"global_step={global_step}, episode_reward={info['episode']['r']}")
+                episode_reward = info['episode']['r']
+                if episode_reward > last_reward:
+                    checkpoint = {
+                            "net": agent.state_dict(),
+                            "optimizer": optimizer.state_dict(),
+                            "global_step": global_step
+                            }
+                    torch.save(checkpoint, ckpt_save_path + f"/best_ckpt.pth")
+                    print(f"save best checkpoint!")
+                    print(f'last_reward: {last_reward}, episode_reward: {episode_reward}')
+                    last_reward = episode_reward
+
                 writer.add_scalar("charts/episode_reward", info['episode']['r'], global_step)
                 break
 
@@ -661,13 +674,17 @@ for update in range(1, num_updates+1):
             if (b_logprobs[minibatch_ind] - agent.get_action(b_obs[minibatch_ind], b_actions.long()[minibatch_ind])[1]).mean() > args.target_kl:
                 agent.load_state_dict(target_agent.state_dict())
                 break
-    if global_step % ckpt_save_frequency == 0:
-        checkpoint = {
-                "net": q_network.state_dict(),
-                "optimizer": optimizer.state_dict(),
-                "global_step": global_step
-                }
-        torch.save(checkpoint, ckpt_save_path + f"/ckpt_{global_step}.pth")
+    # if global_step % ckpt_save_frequency == 0:
+    # if episode_reward > last_reward:
+    #     checkpoint = {
+    #             "net": agent.state_dict(),
+    #             "optimizer": optimizer.state_dict(),
+    #             "global_step": global_step
+    #             }
+    #     torch.save(checkpoint, ckpt_save_path + f"/best_ckpt.pth")
+    #     print(f"save best checkpoint!")
+    #     print(f'last_reward: {last_reward}, episode_reward: {episode_reward}')
+    #     last_reward = episode_reward
 
     # TRY NOT TO MODIFY: record rewards for plotting purposes
     writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]['lr'], global_step)
@@ -679,7 +696,7 @@ for update in range(1, num_updates+1):
         writer.add_scalar("debug/pg_stop_iter", i_epoch_pi, global_step)
 
 checkpoint = {
-        "net": q_network.state_dict(),
+        "net": agent.state_dict(),
         "optimizer": optimizer.state_dict(),
         "global_step": global_step
         }
