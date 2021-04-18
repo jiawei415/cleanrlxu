@@ -386,6 +386,7 @@ if args.prod_mode:
 
 ckpt_save_path = f"results/{experiment_name}/checkponits"
 os.makedirs(ckpt_save_path, exist_ok=True)
+ckpt_save_frequency = args.total_timesteps / 100
 
 # TRY NOT TO MODIFY: seeding
 device = torch.device('cuda' if torch.cuda.is_available() and args.cuda else 'cpu')
@@ -497,6 +498,7 @@ if ckpt:
 # TRY NOT TO MODIFY: start the game
 obs = env.reset()
 episode_reward = 0
+last_reward = float("-inf")
 for global_step in range(start_step+1, args.total_timesteps):
     # ALGO LOGIC: put action logic here
     epsilon = linear_schedule(args.start_e, args.end_e, args.exploration_fraction*args.total_timesteps, global_step)
@@ -541,6 +543,7 @@ for global_step in range(start_step+1, args.total_timesteps):
         # update the target network
         if global_step % args.target_network_frequency == 0:
             target_network.load_state_dict(q_network.state_dict())
+        if global_step % ckpt_save_frequency == 0:
             checkpoint = {
                     "net": q_network.state_dict(),
                     "optimizer": optimizer.state_dict(),
@@ -554,8 +557,14 @@ for global_step in range(start_step+1, args.total_timesteps):
         # important to note that because `EpisodicLifeEnv` wrapper is applied,
         # the real episode reward is actually the sum of episode reward of 5 lives
         # which we record through `info['episode']['r']` provided by gym.wrappers.RecordEpisodeStatistics
-        writer.add_scalar("charts/done_reward", epsilon, global_step)
+        writer.add_scalar("charts/done_reward", episode_reward, global_step)
         obs, episode_reward = env.reset(), 0
 
+checkpoint = {
+        "net": q_network.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "global_step": global_step
+        }
+torch.save(checkpoint, ckpt_save_path + f"/ckpt_{global_step}.pth")
 env.close()
 writer.close()
