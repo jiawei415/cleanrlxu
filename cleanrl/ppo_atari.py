@@ -329,13 +329,13 @@ if __name__ == "__main__":
     # Common arguments
     parser.add_argument('--exp-name', type=str, default=os.path.basename(__file__).rstrip(".py"),
                         help='the name of this experiment')
-    parser.add_argument('--gym-id', type=str, default="BreakoutNoFrameskip-v4",
+    parser.add_argument('--gym-id', type=str, default="Breakout",
                         help='the id of the gym environment')
-    parser.add_argument('--learning-rate', type=float, default=2.5e-4,
+    parser.add_argument('--learning-rate', type=float, default=2.5e-4, # 0.00025
                         help='the learning rate of the optimizer')
-    parser.add_argument('--seed', type=int, default=1,
+    parser.add_argument('--seed', type=int, default=1, # 2 for breakout 1.5 for tennis and pong
                         help='seed of the experiment')
-    parser.add_argument('--total-timesteps', type=int, default=3000000,
+    parser.add_argument('--total-timesteps', type=int, default=10000000,
                         help='total timesteps of the experiments')
     parser.add_argument('--torch-deterministic', type=lambda x:bool(strtobool(x)), default=True, nargs='?', const=True,
                         help='if toggled, `torch.backends.cudnn.deterministic=False`')
@@ -417,7 +417,9 @@ class VecPyTorch(VecEnvWrapper):
 
 # TRY NOT TO MODIFY: setup the environment
 now_time = time.strftime("%Y%m%d%H%M%S", time.localtime())
-experiment_name = f"{args.gym_id}_ppo_{now_time}"
+game_name = args.gym_id + "NoFrameskip-v4"
+print(f"play game: {game_name}")
+experiment_name = f"{game_name}_ppo_{now_time}"
 writer = SummaryWriter(f"results/{experiment_name}/logs")
 writer.add_text('hyperparameters', "|param|value|\n|-|-|\n%s" % (
         '\n'.join([f"|{key}|{value}|" for key, value in vars(args).items()])))
@@ -428,7 +430,7 @@ if args.prod_mode:
 
 ckpt_save_path = f"results/{experiment_name}/checkpoints"
 os.makedirs(ckpt_save_path, exist_ok=True)
-ckpt_save_frequency = args.total_timesteps / (100 * args.num_envs)
+ckpt_save_frequency = args.total_timesteps / (10 * args.num_envs)
 print(f"ckpt_save_frequency: {ckpt_save_frequency}")
 
 # TRY NOT TO MODIFY: seeding
@@ -458,7 +460,7 @@ def make_env(gym_id, seed, idx):
         env.observation_space.seed(seed)
         return env
     return thunk
-envs = VecPyTorch(DummyVecEnv([make_env(args.gym_id, args.seed+i, i) for i in range(args.num_envs)]), device)
+envs = VecPyTorch(DummyVecEnv([make_env(game_name, args.seed+i, i) for i in range(args.num_envs)]), device)
 # if args.prod_mode:
 #     envs = VecPyTorch(
 #         SubprocVecEnv([make_env(args.gym_id, args.seed+i, i) for i in range(args.num_envs)], "fork"),
@@ -583,14 +585,12 @@ for update in range(1, num_updates+1):
                             "optimizer": optimizer.state_dict(),
                             "global_step": global_step
                             }
-
                     with open(ckpt_save_path + "/best_ckpt.pkl", 'wb') as f:
                         pickle.dump(checkpoint, f)
                     torch.save(checkpoint['net'], ckpt_save_path + f"/best_model.pt")
                     print(f"save best checkpoint!")
                     print(f'last_reward: {last_reward}, episode_reward: {episode_reward}')
                     last_reward = episode_reward
-
                 writer.add_scalar("charts/episode_reward", info['episode']['r'], global_step)
                 break
 
@@ -680,17 +680,16 @@ for update in range(1, num_updates+1):
             if (b_logprobs[minibatch_ind] - agent.get_action(b_obs[minibatch_ind], b_actions.long()[minibatch_ind])[1]).mean() > args.target_kl:
                 agent.load_state_dict(target_agent.state_dict())
                 break
-    # if global_step % ckpt_save_frequency == 0:
-    # if episode_reward > last_reward:
-    #     checkpoint = {
-    #             "net": agent.state_dict(),
-    #             "optimizer": optimizer.state_dict(),
-    #             "global_step": global_step
-    #             }
-    #     torch.save(checkpoint, ckpt_save_path + f"/best_ckpt.pth")
-    #     print(f"save best checkpoint!")
-    #     print(f'last_reward: {last_reward}, episode_reward: {episode_reward}')
-    #     last_reward = episode_reward
+    if global_step % ckpt_save_frequency == 0:
+        checkpoint = {
+                "net": agent.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "global_step": global_step
+                }
+        with open(ckpt_save_path + "/ckpt_{global_step}.pkl", 'wb') as f:
+            pickle.dump(checkpoint, f)
+        torch.save(checkpoint['net'], ckpt_save_path + f"/model_{global_step}.pt")
+        print(f"save checkpoint at {global_step}!")
 
     # TRY NOT TO MODIFY: record rewards for plotting purposes
     writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]['lr'], global_step)
@@ -706,7 +705,8 @@ checkpoint = {
         "optimizer": optimizer.state_dict(),
         "global_step": global_step
         }
-torch.save(checkpoint, ckpt_save_path + f"/ckpt_{global_step}.pth")
-
+with open(ckpt_save_path + "/ckpt_{global_step}.pkl", 'wb') as f:
+    pickle.dump(checkpoint, f)
+torch.save(checkpoint['net'], ckpt_save_path + f"/model_{global_step}.pt")
 envs.close()
 writer.close()
