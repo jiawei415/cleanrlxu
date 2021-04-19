@@ -320,6 +320,7 @@ from gym.wrappers import TimeLimit, Monitor
 from gym.spaces import Discrete, Box, MultiBinary, MultiDiscrete, Space
 import time
 import random
+import pickle
 import os
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnvWrapper
 
@@ -425,7 +426,7 @@ if args.prod_mode:
     wandb.init(project=args.wandb_project_name, entity=args.wandb_entity, sync_tensorboard=True, config=vars(args), name=experiment_name, monitor_gym=True, save_code=True)
     writer = SummaryWriter(f"/tmp/{experiment_name}")
 
-ckpt_save_path = f"results/{experiment_name}/checkponits"
+ckpt_save_path = f"results/{experiment_name}/checkpoints"
 os.makedirs(ckpt_save_path, exist_ok=True)
 ckpt_save_frequency = args.total_timesteps / (100 * args.num_envs)
 print(f"ckpt_save_frequency: {ckpt_save_frequency}")
@@ -521,9 +522,11 @@ if args.anneal_lr:
 global_step = 0
 ckpt = args.ckpt
 if ckpt:
-    ckpt_load_path = f"results/{args.gym_id}_dqn_{ckpt.split(':')[0]}/checkponits/ckpt_{ckpt.split(':')[1]}.pth"
+    ckpt_load_path = f"results/{args.gym_id}_ppo_{ckpt}/checkpoints/best_ckpt.pkl"
+    with open(ckpt_load_path, 'rb') as f:
+        checkpoint = pickle.load(f)
     print(f"load checkpoint path: {ckpt_load_path}")
-    checkpoint = torch.load(ckpt_load_path)
+    # checkpoint = torch.load(ckpt_load_path)
     agent.load_state_dict(checkpoint['net'])
     optimizer.load_state_dict(checkpoint['optimizer'])
     global_step = checkpoint['global_step']
@@ -580,7 +583,10 @@ for update in range(1, num_updates+1):
                             "optimizer": optimizer.state_dict(),
                             "global_step": global_step
                             }
-                    torch.save(checkpoint, ckpt_save_path + f"/best_ckpt.pth")
+
+                    with open(ckpt_save_path + "/best_ckpt.pkl", 'wb') as f:
+                        pickle.dump(checkpoint, f)
+                    torch.save(checkpoint['net'], ckpt_save_path + f"/best_model.pt")
                     print(f"save best checkpoint!")
                     print(f'last_reward: {last_reward}, episode_reward: {episode_reward}')
                     last_reward = episode_reward
