@@ -323,15 +323,16 @@ from gym.spaces import Discrete, Box, MultiBinary, MultiDiscrete, Space
 import time
 import random
 import os
+import pickle
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='C51 agent')
     # Common arguments
     parser.add_argument('--exp-name', type=str, default=os.path.basename(__file__).rstrip(".py"),
                         help='the name of this experiment')
-    parser.add_argument('--gym-id', type=str, default="BreakoutNoFrameskip-v4",
+    parser.add_argument('--gym-id', type=str, default="Breakout",
                         help='the id of the gym environment')
-    parser.add_argument('--learning-rate', type=float, default=1e-4,
+    parser.add_argument('--learning-rate', type=float, default=2.5e-4,# 0.00025 for MsPacman
                         help='the learning rate of the optimizer')
     parser.add_argument('--seed', type=int, default=2,
                         help='seed of the experiment')
@@ -349,7 +350,9 @@ if __name__ == "__main__":
                         help="the wandb's project name")
     parser.add_argument('--wandb-entity', type=str, default=None,
                         help="the entity (team) of wandb's project")
-    
+    parser.add_argument('--ckpt', type=str, default=None,
+                        help="load checkpoint path")
+
     # Algorithm specific arguments
     parser.add_argument('--n-atoms', type=int, default=51,
                         help="the number of atoms")
@@ -382,8 +385,11 @@ if __name__ == "__main__":
         args.seed = int(time.time())
 
 # TRY NOT TO MODIFY: setup the environment
-experiment_name = f"{args.gym_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
-writer = SummaryWriter(f"runs/{experiment_name}")
+now_time = time.strftime("%Y%m%d%H%M%S", time.localtime())
+game_name = args.gym_id + "NoFrameskip-v4"
+print(f"play game: {game_name}")
+experiment_name = f"{game_name}_c51_{now_time}"
+writer = SummaryWriter(f"results/{experiment_name}/logs")
 writer.add_text('hyperparameters', "|param|value|\n|-|-|\n%s" % (
         '\n'.join([f"|{key}|{value}|" for key, value in vars(args).items()])))
 if args.prod_mode:
@@ -391,9 +397,14 @@ if args.prod_mode:
     wandb.init(project=args.wandb_project_name, entity=args.wandb_entity, sync_tensorboard=True, config=vars(args), name=experiment_name, monitor_gym=True, save_code=True)
     writer = SummaryWriter(f"/tmp/{experiment_name}")
 
+ckpt_save_path = f"results/{experiment_name}/checkpoints"
+os.makedirs(ckpt_save_path, exist_ok=True)
+ckpt_save_frequency = args.total_timesteps / 10
+print(f"ckpt_save_frequency: {ckpt_save_frequency}")
+
 # TRY NOT TO MODIFY: seeding
 device = torch.device('cuda' if torch.cuda.is_available() and args.cuda else 'cpu')
-env = gym.make(args.gym_id)
+env = gym.make(game_name)
 env = wrap_atari(env)
 env = gym.wrappers.RecordEpisodeStatistics(env) # records episode reward in `info['episode']['r']`
 if args.capture_video:
@@ -420,14 +431,14 @@ assert isinstance(env.action_space, Discrete), "only discrete action space is su
 class ReplayBuffer():
     def __init__(self, buffer_limit):
         self.buffer = collections.deque(maxlen=buffer_limit)
-    
+
     def put(self, transition):
         self.buffer.append(transition)
-    
+
     def sample(self, n):
         mini_batch = random.sample(self.buffer, n)
         s_lst, a_lst, r_lst, s_prime_lst, done_mask_lst = [], [], [], [], []
-        
+
         for transition in mini_batch:
             s, a, r, s_prime, done_mask = transition
             s_lst.append(s)
@@ -493,10 +504,24 @@ loss_fn = nn.MSELoss()
 print(device.__repr__())
 print(q_network)
 
+start_step = -1
+ckpt = args.ckpt
+if ckpt:
+    ckpt_load_path = f"results/{game_name}_ppo_{ckpt}/checkpoints/best_ckpt.pkl"
+    with open(ckpt_load_path, 'rb') as f:
+        checkpoint = pickle.load(f)
+    print(f"load checkpoint path: {ckpt_load_path}")
+    q_network.load_state_dict(checkpoint['net'])
+    target_network.load_state_dict(checkpoint['net'])
+    optimizer.load_state_dict(checkpoint['optimizer'])
+    start_step = checkpoint['global_step']
+    print(f"load checkpoint done")
+
 # TRY NOT TO MODIFY: start the game
 obs = env.reset()
 episode_reward = 0
-for global_step in range(args.total_timesteps):
+last_reward = float("-inf")
+for global_step in range(start_step+1, args.total_timesteps):
     # ALGO LOGIC: put action logic here
     epsilon = linear_schedule(args.start_e, args.end_e, args.exploration_fraction*args.total_timesteps, global_step)
     if random.random() < epsilon:
@@ -507,13 +532,25 @@ for global_step in range(args.total_timesteps):
 
     # TRY NOT TO MODIFY: execute the game and log data.
     next_obs, reward, done, info = env.step(action)
-    episode_reward += reward
 
     # TRY NOT TO MODIFY: record rewards for plotting purposes
     if 'episode' in info.keys():
         print(f"global_step={global_step}, episode_reward={info['episode']['r']}")
+        episode_reward = info['episode']['r']
         writer.add_scalar("charts/episode_reward", info['episode']['r'], global_step)
         writer.add_scalar("charts/epsilon", epsilon, global_step)
+        if last_reward < episode_reward:
+            checkpoint = {
+                    "net": q_network.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "global_step": global_step
+                    }
+            with open(ckpt_save_path + "/best_ckpt.pkl", 'wb') as f:
+                pickle.dump(checkpoint, f)
+            torch.save(checkpoint['net'], ckpt_save_path + f"/best_model.pt")
+            print(f"save best checkpoint!")
+            print(f'last_reward: {last_reward}, episode_reward: {episode_reward}')
+            last_reward = episode_reward
 
     # ALGO LOGIC: training.
     rb.put((obs, action, reward, next_obs, done))
@@ -525,7 +562,7 @@ for global_step in range(args.total_timesteps):
             # projection
             delta_z = q_network.atoms[1]-q_network.atoms[0]
             tz = next_atoms.clamp(args.v_min, args.v_max)
-            
+
             b = (tz - args.v_min)/ delta_z
             l = b.floor().clamp(0, args.n_atoms-1)
             u = b.ceil().clamp(0, args.n_atoms-1)
@@ -537,11 +574,11 @@ for global_step in range(args.total_timesteps):
             for i in range(target_pmfs.size(0)):
                 target_pmfs[i].index_add_(0, l[i].long(), d_m_l[i])
                 target_pmfs[i].index_add_(0, u[i].long(), d_m_u[i])
-        
+
         _, old_pmfs = q_network.get_action(env, device, s_obs, s_actions)
         loss = (-(target_pmfs * old_pmfs.clamp(min=1e-5).log()).sum(-1)).mean()
         # loss = (target_pmfs * (target_pmfs.clamp(min=1e-5).log() - old_pmfs.clamp(min=1e-5).log())).sum(-1).mean()
-        
+
         if global_step % 100 == 0:
             writer.add_scalar("losses/td_loss", loss, global_step)
 
@@ -554,6 +591,16 @@ for global_step in range(args.total_timesteps):
         # update the target network
         if global_step % args.target_network_frequency == 0:
             target_network.load_state_dict(q_network.state_dict())
+        if global_step % ckpt_save_frequency == 0:
+            checkpoint = {
+                    "net": q_network.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "global_step": global_step
+                    }
+            with open(ckpt_save_path + "/ckpt_{global_step}.pkl", 'wb') as f:
+                pickle.dump(checkpoint, f)
+            torch.save(checkpoint['net'], ckpt_save_path + f"/model__{global_step}.pt")
+            print(f"save checkpoint at {global_step}!")
 
     # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
     obs = next_obs
@@ -561,7 +608,14 @@ for global_step in range(args.total_timesteps):
         # important to note that because `EpisodicLifeEnv` wrapper is applied,
         # the real episode reward is actually the sum of episode reward of 5 lives
         # which we record through `info['episode']['r']` provided by gym.wrappers.RecordEpisodeStatistics
-        obs, episode_reward = env.reset(), 0
-
+        obs = env.reset()
+checkpoint = {
+        "net": q_network.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "global_step": global_step
+        }
+with open(ckpt_save_path + "/ckpt_{global_step}.pkl", 'wb') as f:
+    pickle.dump(checkpoint, f)
+torch.save(checkpoint['net'], ckpt_save_path + f"/model__{global_step}.pt")
 env.close()
 writer.close()
