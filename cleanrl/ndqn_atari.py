@@ -375,7 +375,7 @@ if __name__ == "__main__":
 
 # TRY NOT TO MODIFY: setup the environment
 now_time = time.strftime("%Y%m%d%H%M%S", time.localtime())
-experiment_name = f"{args.gym_id}_3dqn_{now_time}"
+experiment_name = f"{args.gym_id}_ndqn_{now_time}"
 writer = SummaryWriter(f"results/{experiment_name}/logs")
 writer.add_text('hyperparameters', "|param|value|\n|-|-|\n%s" % (
         '\n'.join([f"|{key}|{value}|" for key, value in vars(args).items()])))
