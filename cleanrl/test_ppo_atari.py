@@ -417,17 +417,11 @@ class VecPyTorch(VecEnvWrapper):
 # TRY NOT TO MODIFY: setup the environment
 now_time = time.strftime("%Y%m%d%H%M%S", time.localtime())
 experiment_name = f"{args.gym_id}_ppo_{now_time}"
-writer = SummaryWriter(f"results/{experiment_name}/logs")
-writer.add_text('hyperparameters', "|param|value|\n|-|-|\n%s" % (
-        '\n'.join([f"|{key}|{value}|" for key, value in vars(args).items()])))
 if args.prod_mode:
     import wandb
     wandb.init(project=args.wandb_project_name, entity=args.wandb_entity, sync_tensorboard=True, config=vars(args), name=experiment_name, monitor_gym=True, save_code=True)
     writer = SummaryWriter(f"/tmp/{experiment_name}")
 
-ckpt_save_path = f"results/{experiment_name}/checkponits"
-os.makedirs(ckpt_save_path, exist_ok=True)
-ckpt_save_frequency = args.total_timesteps / 100
 
 # TRY NOT TO MODIFY: seeding
 device = torch.device('cuda' if torch.cuda.is_available() and args.cuda else 'cpu')
@@ -515,7 +509,7 @@ print(f"net:\n", agent)
 
 ckpt = args.ckpt
 if ckpt:
-    ckpt_load_path = f"results/{args.gym_id}_dqn_{ckpt.split(':')[0]}/checkponits/ckpt_{ckpt.split(':')[1]}.pth"
+    ckpt_load_path = f"results/{args.gym_id}_ppo_{ckpt}/checkponits/best_ckpt.pth"
     print(f"load checkpoint path: {ckpt_load_path}")
     checkpoint = torch.load(ckpt_load_path)
     agent.load_state_dict(checkpoint['net'])
@@ -533,20 +527,21 @@ values = torch.zeros((args.num_steps, args.num_envs)).to(device)
 # TRY NOT TO MODIFY: start the game
 # Note how `next_obs` and `next_done` are used; their usage is equivalent to
 # https://github.com/ikostrikov/pytorch-a2c-ppo-acktr-gail/blob/84a7582477fb0d5c82ad6d850fe476829dddd2e1/a2c_ppo_acktr/storage.py#L60
-next_obs = envs.reset()
-done = False
-total_reward = 0
-step = 0
-while not done:
-    envs.render()
-    obs = next_obs
-    step += 1 * args.num_envs
-    with torch.no_grad():
-        action, logproba, _ = agent.get_action(obs)
-    next_obs, reward, done, infos = envs.step(action)
-    total_reward += reward
+for i in range(100):
+    next_obs = envs.reset()
+    done = False
+    total_reward = 0
+    step = 0
+    while not done:
+        envs.render()
+        obs = next_obs
+        step += 1 * args.num_envs
+        with torch.no_grad():
+            action, logproba, _ = agent.get_action(obs)
+        next_obs, reward, done, infos = envs.step(action)
+        total_reward += reward
 
-print(f"total_step: {step}. total_reward: {total_reward}")
+    print(f"i: {i}. total_step: {step}. total_reward: {total_reward}")
 
 
 envs.close()
