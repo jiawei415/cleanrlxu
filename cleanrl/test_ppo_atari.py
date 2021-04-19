@@ -391,8 +391,6 @@ if __name__ == "__main__":
     if not args.seed:
         args.seed = int(time.time())
 
-args.batch_size = int(args.num_envs * args.num_steps)
-args.minibatch_size = int(args.batch_size // args.n_minibatch)
 
 class VecPyTorch(VecEnvWrapper):
     def __init__(self, venv, device):
@@ -535,7 +533,7 @@ for i in range(100):
     while not done:
         envs.render()
         obs = next_obs
-        step += 1 * args.num_envs
+        step += 1
         with torch.no_grad():
             action, logproba, _ = agent.get_action(obs)
         next_obs, reward, done, infos = envs.step(action)
