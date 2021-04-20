@@ -321,6 +321,7 @@ from gym.spaces import Discrete, Box, MultiBinary, MultiDiscrete, Space
 import time
 import random
 import os
+import pickle
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnvWrapper
 
 if __name__ == "__main__":
@@ -412,15 +413,10 @@ class VecPyTorch(VecEnvWrapper):
         reward = torch.from_numpy(reward).unsqueeze(dim=1).float()
         return obs, reward, done, info
 
-# TRY NOT TO MODIFY: setup the environment
 now_time = time.strftime("%Y%m%d%H%M%S", time.localtime())
-experiment_name = f"{args.gym_id}_ppo_{now_time}"
-if args.prod_mode:
-    import wandb
-    wandb.init(project=args.wandb_project_name, entity=args.wandb_entity, sync_tensorboard=True, config=vars(args), name=experiment_name, monitor_gym=True, save_code=True)
-    writer = SummaryWriter(f"/tmp/{experiment_name}")
-
-
+game_name = args.gym_id + "NoFrameskip-v4"
+print(f"play game: {game_name}")
+experiment_name = f"{game_name}_ppo_{now_time}"
 # TRY NOT TO MODIFY: seeding
 device = torch.device('cuda' if torch.cuda.is_available() and args.cuda else 'cpu')
 random.seed(args.seed)
@@ -448,7 +444,7 @@ def make_env(gym_id, seed, idx):
         env.observation_space.seed(seed)
         return env
     return thunk
-envs = VecPyTorch(DummyVecEnv([make_env(args.gym_id, args.seed+i, i) for i in range(args.num_envs)]), device)
+envs = VecPyTorch(DummyVecEnv([make_env(game_name, args.seed+i, i) for i in range(args.num_envs)]), device)
 # if args.prod_mode:
 #     envs = VecPyTorch(
 #         SubprocVecEnv([make_env(args.gym_id, args.seed+i, i) for i in range(args.num_envs)], "fork"),
@@ -507,9 +503,12 @@ print(f"net:\n", agent)
 
 ckpt = args.ckpt
 if ckpt:
-    ckpt_load_path = f"results/{args.gym_id}_ppo_{ckpt}/checkponits/best_ckpt.pth"
+    ckpt_load_path = f"results/{game_name}_ppo_{ckpt}/checkpoints/best_ckpt.pkl"
+    with open(ckpt_load_path, 'rb') as f:
+        checkpoint = pickle.load(f)
+    # ckpt_load_path = f"results/{game_name}_ppo_{ckpt}/checkponits/best_ckpt.pth"
+    # checkpoint = torch.load(ckpt_load_path)
     print(f"load checkpoint path: {ckpt_load_path}")
-    checkpoint = torch.load(ckpt_load_path)
     agent.load_state_dict(checkpoint['net'])
     print(f"load checkpoint done")
 
@@ -525,7 +524,7 @@ values = torch.zeros((args.num_steps, args.num_envs)).to(device)
 # TRY NOT TO MODIFY: start the game
 # Note how `next_obs` and `next_done` are used; their usage is equivalent to
 # https://github.com/ikostrikov/pytorch-a2c-ppo-acktr-gail/blob/84a7582477fb0d5c82ad6d850fe476829dddd2e1/a2c_ppo_acktr/storage.py#L60
-for i in range(100):
+for i in range(30):
     next_obs = envs.reset()
     done = False
     total_reward = 0
@@ -538,6 +537,7 @@ for i in range(100):
             action, logproba, _ = agent.get_action(obs)
         next_obs, reward, done, infos = envs.step(action)
         total_reward += reward
+
 
     print(f"i: {i}. total_step: {step}. total_reward: {total_reward}")
 
