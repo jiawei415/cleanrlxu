@@ -550,6 +550,7 @@ next_obs = envs.reset()
 next_done = torch.zeros(args.num_envs).to(device)
 num_updates = args.total_timesteps // args.batch_size
 last_reward = float("-inf")
+training_step = 0
 for update in range(1, num_updates+1):
     # Annealing the rate if instructed to do so.
     if args.anneal_lr:
@@ -636,6 +637,7 @@ for update in range(1, num_updates+1):
     for i_epoch_pi in range(args.update_epochs):
         np.random.shuffle(inds)
         target_agent.load_state_dict(agent.state_dict())
+        training_step += 1
         for start in range(0, args.batch_size, args.minibatch_size):
             end = start + args.minibatch_size
             minibatch_ind = inds[start:end]
@@ -680,16 +682,16 @@ for update in range(1, num_updates+1):
             if (b_logprobs[minibatch_ind] - agent.get_action(b_obs[minibatch_ind], b_actions.long()[minibatch_ind])[1]).mean() > args.target_kl:
                 agent.load_state_dict(target_agent.state_dict())
                 break
-    if global_step % ckpt_save_frequency == 0:
-        checkpoint = {
-                "net": agent.state_dict(),
-                "optimizer": optimizer.state_dict(),
-                "global_step": global_step
-                }
-        with open(ckpt_save_path + "/ckpt_{global_step}.pkl", 'wb') as f:
-            pickle.dump(checkpoint, f)
-        torch.save(checkpoint['net'], ckpt_save_path + f"/model_{global_step}.pt")
-        print(f"save checkpoint at {global_step}!")
+        if training_step % 500000 == 0:
+            checkpoint = {
+                    "net": agent.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "global_step": global_step
+                    }
+            with open(ckpt_save_path + f"/ckpt_{global_step}.pkl", 'wb') as f:
+                pickle.dump(checkpoint, f)
+            torch.save(checkpoint['net'], ckpt_save_path + f"/model_{global_step}.pt")
+            print(f"save checkpoint at {global_step}!")
 
     # TRY NOT TO MODIFY: record rewards for plotting purposes
     writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]['lr'], global_step)
@@ -705,7 +707,7 @@ checkpoint = {
         "optimizer": optimizer.state_dict(),
         "global_step": global_step
         }
-with open(ckpt_save_path + "/ckpt_{global_step}.pkl", 'wb') as f:
+with open(ckpt_save_path + f"/ckpt_{global_step}.pkl", 'wb') as f:
     pickle.dump(checkpoint, f)
 torch.save(checkpoint['net'], ckpt_save_path + f"/model_{global_step}.pt")
 envs.close()
