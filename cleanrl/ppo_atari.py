@@ -588,6 +588,7 @@ for update in range(1, num_updates+1):
                             }
                     with open(ckpt_save_path + "/best_ckpt.pkl", 'wb') as f:
                         pickle.dump(checkpoint, f)
+                    f.close()
                     torch.save(checkpoint['net'], ckpt_save_path + f"/best_model.pt")
                     print(f"save best checkpoint!")
                     print(f'last_reward: {last_reward}, episode_reward: {episode_reward}')
@@ -682,7 +683,7 @@ for update in range(1, num_updates+1):
             if (b_logprobs[minibatch_ind] - agent.get_action(b_obs[minibatch_ind], b_actions.long()[minibatch_ind])[1]).mean() > args.target_kl:
                 agent.load_state_dict(target_agent.state_dict())
                 break
-        if training_step % 500000 == 0:
+        if training_step % 1000 == 0:
             checkpoint = {
                     "net": agent.state_dict(),
                     "optimizer": optimizer.state_dict(),
@@ -690,6 +691,7 @@ for update in range(1, num_updates+1):
                     }
             with open(ckpt_save_path + f"/ckpt_{global_step}.pkl", 'wb') as f:
                 pickle.dump(checkpoint, f)
+            f.close()
             torch.save(checkpoint['net'], ckpt_save_path + f"/model_{global_step}.pt")
             print(f"save checkpoint at {global_step}!")
 
