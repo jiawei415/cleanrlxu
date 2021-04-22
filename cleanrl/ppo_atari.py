@@ -683,7 +683,7 @@ for update in range(1, num_updates+1):
             if (b_logprobs[minibatch_ind] - agent.get_action(b_obs[minibatch_ind], b_actions.long()[minibatch_ind])[1]).mean() > args.target_kl:
                 agent.load_state_dict(target_agent.state_dict())
                 break
-        if training_step % 1000 == 0:
+        if training_step % 2000 == 0:
             checkpoint = {
                     "net": agent.state_dict(),
                     "optimizer": optimizer.state_dict(),

@@ -614,7 +614,7 @@ checkpoint = {
         "optimizer": optimizer.state_dict(),
         "global_step": global_step
         }
-with open(ckpt_save_path + "f/ckpt_{global_step}.pkl", 'wb') as f:
+with open(ckpt_save_path + f"/ckpt_{global_step}.pkl", 'wb') as f:
     pickle.dump(checkpoint, f)
 torch.save(checkpoint['net'], ckpt_save_path + f"/model__{global_step}.pt")
 env.close()
