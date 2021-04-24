@@ -129,7 +129,6 @@ class ClipRewardEnv(gym.RewardWrapper):
         """Bin reward to {+1, 0, -1} by its sign."""
         return np.sign(reward)
 
-
 class WarpFrame(gym.ObservationWrapper):
     def __init__(self, env, width=84, height=84, grayscale=True, dict_space_key=None):
         """
@@ -181,7 +180,6 @@ class WarpFrame(gym.ObservationWrapper):
             obs = obs.copy()
             obs[self._key] = frame
         return obs
-
 
 class FrameStack(gym.Wrapper):
     def __init__(self, env, k):
@@ -282,7 +280,6 @@ def wrap_deepmind(env, episode_life=True, clip_rewards=True, frame_stack=False, 
         env = FrameStack(env, 4)
     return env
 
-
 class ImageToPyTorch(gym.ObservationWrapper):
     """
     Image shape to channels x weight x height
@@ -326,10 +323,15 @@ from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnvW
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='PPO agent')
+    # Transfer config
+    parser.add_argument('--source', type=str, default="Breakout",
+                        help='the name of sourece game')
+    parser.add_argument('--source-path', type=str, default='20210419225054',
+                        help='the model of sourece game')
     # Common arguments
     parser.add_argument('--exp-name', type=str, default=os.path.basename(__file__).rstrip(".py"),
                         help='the name of this experiment')
-    parser.add_argument('--gym-id', type=str, default="Breakout",
+    parser.add_argument('--gym-id', type=str, default="Tennis",
                         help='the id of the gym environment')
     parser.add_argument('--learning-rate', type=float, default=2.5e-4, # 0.00025
                         help='the learning rate of the optimizer')
@@ -355,7 +357,7 @@ if __name__ == "__main__":
     # Algorithm specific arguments
     parser.add_argument('--n-minibatch', type=int, default=4,
                         help='the number of mini batch')
-    parser.add_argument('--num-envs', type=int, default=8,
+    parser.add_argument('--num-envs', type=int, default=4,
                         help='the number of parallel game environment')
     parser.add_argument('--num-steps', type=int, default=128,
                         help='the number of steps per game environment')
@@ -415,23 +417,20 @@ class VecPyTorch(VecEnvWrapper):
         reward = torch.from_numpy(reward).unsqueeze(dim=1).float()
         return obs, reward, done, info
 
+source_game = args.source + "NoFrameskip-v4"
+source_path = f"results/{source_game}_ppo_{args.source_path}/checkpoints/best_model.pt"
+
 # TRY NOT TO MODIFY: setup the environment
 now_time = time.strftime("%Y%m%d%H%M%S", time.localtime())
 game_name = args.gym_id + "NoFrameskip-v4"
 print(f"play game: {game_name}")
-experiment_name = f"{game_name}_ppo_{now_time}"
+experiment_name = f"{game_name}_ppo_{now_time}_transfer"
 writer = SummaryWriter(f"results/{experiment_name}/logs")
 writer.add_text('hyperparameters', "|param|value|\n|-|-|\n%s" % (
         '\n'.join([f"|{key}|{value}|" for key, value in vars(args).items()])))
-if args.prod_mode:
-    import wandb
-    wandb.init(project=args.wandb_project_name, entity=args.wandb_entity, sync_tensorboard=True, config=vars(args), name=experiment_name, monitor_gym=True, save_code=True)
-    writer = SummaryWriter(f"/tmp/{experiment_name}")
 
 ckpt_save_path = f"results/{experiment_name}/checkpoints"
 os.makedirs(ckpt_save_path, exist_ok=True)
-ckpt_save_frequency = args.total_timesteps / (10 * args.num_envs)
-print(f"ckpt_save_frequency: {ckpt_save_frequency}")
 
 # TRY NOT TO MODIFY: seeding
 device = torch.device('cuda' if torch.cuda.is_available() and args.cuda else 'cpu')
@@ -461,11 +460,7 @@ def make_env(gym_id, seed, idx):
         return env
     return thunk
 envs = VecPyTorch(DummyVecEnv([make_env(game_name, args.seed+i, i) for i in range(args.num_envs)]), device)
-# if args.prod_mode:
-#     envs = VecPyTorch(
-#         SubprocVecEnv([make_env(args.gym_id, args.seed+i, i) for i in range(args.num_envs)], "fork"),
-#         device
-#     )
+source_envs = VecPyTorch(DummyVecEnv([make_env(source_game, args.seed+i, i) for i in range(args.num_envs)]), device)
 assert isinstance(envs.action_space, Discrete), "only discrete action space is supported"
 
 # ALGO LOGIC: initialize agent here:
@@ -482,9 +477,9 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     torch.nn.init.constant_(layer.bias, bias_const)
     return layer
 
-class Agent(nn.Module):
+class Teacher(nn.Module):
     def __init__(self, envs, frames=4):
-        super(Agent, self).__init__()
+        super(Teacher, self).__init__()
         self.network = nn.Sequential(
             Scale(1/255),
             layer_init(nn.Conv2d(frames, 32, 8, stride=4)),
@@ -513,10 +508,43 @@ class Agent(nn.Module):
     def get_value(self, x):
         return self.critic(self.forward(x))
 
-agent = Agent(envs).to(device)
-print(f"device: {device}")
-print(f"net:\n", agent)
-optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
+class Student(nn.Module):
+    def __init__(self, envs, frames=4):
+        super(Student, self).__init__()
+        self.network = nn.Sequential(
+            Scale(1/255),
+            layer_init(nn.Conv2d(frames, 32, 8, stride=4)),
+            nn.ReLU(),
+            layer_init(nn.Conv2d(32, 64, 4, stride=2)),
+            nn.ReLU(),
+            layer_init(nn.Conv2d(64, 64, 3, stride=1)),
+            nn.ReLU(),
+            nn.Flatten(),
+            layer_init(nn.Linear(3136, 512)),
+            nn.ReLU()
+        )
+        self.actor = layer_init(nn.Linear(512, envs.action_space.n), std=0.01)
+        # self.critic = layer_init(nn.Linear(512, 1), std=1)
+
+    def forward(self, x):
+        return self.network(x)
+
+    def get_action(self, x, action=None):
+        logits = self.actor(self.forward(x))
+        probs = Categorical(logits=logits)
+        if action is None:
+            action = probs.sample()
+        return action, probs.log_prob(action), probs.entropy()
+
+    # def get_value(self, x):
+    #     return self.critic(self.forward(x))
+
+teacher = Teacher(source_envs).to(device)
+source_model = torch.load(source_path)
+teacher.load_state_dict(source_model)
+
+student = Student(envs).to(device)
+optimizer = optim.Adam(student.parameters(), lr=args.learning_rate, eps=1e-5)
 if args.anneal_lr:
     # https://github.com/openai/baselines/blob/ea25b9e8b234e6ee1bca43083f8f3cf974143998/baselines/ppo2/defaults.py#L20
     lr = lambda f: f * args.learning_rate
@@ -529,7 +557,7 @@ if ckpt:
         checkpoint = pickle.load(f)
     print(f"load checkpoint path: {ckpt_load_path}")
     # checkpoint = torch.load(ckpt_load_path)
-    agent.load_state_dict(checkpoint['net'])
+    student.load_state_dict(checkpoint['net'])
     optimizer.load_state_dict(checkpoint['optimizer'])
     global_step = checkpoint['global_step']
     print(f"load checkpoint done")
@@ -566,8 +594,9 @@ for update in range(1, num_updates+1):
 
         # ALGO LOGIC: put action logic here
         with torch.no_grad():
-            values[step] = agent.get_value(obs[step]).flatten()
-            action, logproba, _ = agent.get_action(obs[step])
+            # values[step] = student.get_value(obs[step]).flatten()
+            values[step] = teacher.get_value(obs[step]).flatten()
+            action, logproba, _ = student.get_action(obs[step])
 
         actions[step] = action
         logprobs[step] = logproba
@@ -582,7 +611,7 @@ for update in range(1, num_updates+1):
                 episode_reward = info['episode']['r']
                 if episode_reward > last_reward:
                     checkpoint = {
-                            "net": agent.state_dict(),
+                            "net": student.state_dict(),
                             "optimizer": optimizer.state_dict(),
                             "global_step": global_step
                             }
@@ -598,7 +627,7 @@ for update in range(1, num_updates+1):
 
     # bootstrap reward if not done. reached the batch limit
     with torch.no_grad():
-        last_value = agent.get_value(next_obs.to(device)).reshape(1, -1)
+        last_value = teacher.get_value(next_obs.to(device)).reshape(1, -1)
         if args.gae:
             advantages = torch.zeros_like(rewards).to(device)
             lastgaelam = 0
@@ -633,11 +662,11 @@ for update in range(1, num_updates+1):
     b_values = values.reshape(-1)
 
     # Optimizaing the policy and value network
-    target_agent = Agent(envs).to(device)
+    target_student = Student(envs).to(device)
     inds = np.arange(args.batch_size,)
     for i_epoch_pi in range(args.update_epochs):
         np.random.shuffle(inds)
-        target_agent.load_state_dict(agent.state_dict())
+        target_student.load_state_dict(student.state_dict())
         training_step += 1
         for start in range(0, args.batch_size, args.minibatch_size):
             end = start + args.minibatch_size
@@ -646,7 +675,7 @@ for update in range(1, num_updates+1):
             if args.norm_adv:
                 mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
 
-            _, newlogproba, entropy = agent.get_action(b_obs[minibatch_ind], b_actions.long()[minibatch_ind])
+            _, newlogproba, entropy = student.get_action(b_obs[minibatch_ind], b_actions.long()[minibatch_ind])
             ratio = (newlogproba - b_logprobs[minibatch_ind]).exp()
 
             # Stats
@@ -659,33 +688,33 @@ for update in range(1, num_updates+1):
             entropy_loss = entropy.mean()
 
             # Value loss
-            new_values = agent.get_value(b_obs[minibatch_ind]).view(-1)
-            if args.clip_vloss:
-                v_loss_unclipped = ((new_values - b_returns[minibatch_ind]) ** 2)
-                v_clipped = b_values[minibatch_ind] + torch.clamp(new_values - b_values[minibatch_ind], -args.clip_coef, args.clip_coef)
-                v_loss_clipped = (v_clipped - b_returns[minibatch_ind])**2
-                v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
-                v_loss = 0.5 * v_loss_max.mean()
-            else:
-                v_loss = 0.5 * ((new_values - b_returns[minibatch_ind]) ** 2).mean()
+            # new_values = student.get_value(b_obs[minibatch_ind]).view(-1)
+            # if args.clip_vloss:
+            #     v_loss_unclipped = ((new_values - b_returns[minibatch_ind]) ** 2)
+            #     v_clipped = b_values[minibatch_ind] + torch.clamp(new_values - b_values[minibatch_ind], -args.clip_coef, args.clip_coef)
+            #     v_loss_clipped = (v_clipped - b_returns[minibatch_ind])**2
+            #     v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
+            #     v_loss = 0.5 * v_loss_max.mean()
+            # else:
+            #     v_loss = 0.5 * ((new_values - b_returns[minibatch_ind]) ** 2).mean()
 
-            loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
-
+            # loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
+            loss = pg_loss - args.ent_coef * entropy_loss
             optimizer.zero_grad()
             loss.backward()
-            nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
+            nn.utils.clip_grad_norm_(student.parameters(), args.max_grad_norm)
             optimizer.step()
 
         if args.kle_stop:
             if approx_kl > args.target_kl:
                 break
         if args.kle_rollback:
-            if (b_logprobs[minibatch_ind] - agent.get_action(b_obs[minibatch_ind], b_actions.long()[minibatch_ind])[1]).mean() > args.target_kl:
-                agent.load_state_dict(target_agent.state_dict())
+            if (b_logprobs[minibatch_ind] - student.get_action(b_obs[minibatch_ind], b_actions.long()[minibatch_ind])[1]).mean() > args.target_kl:
+                student.load_state_dict(target_student.state_dict())
                 break
         if training_step % 2000 == 0:
             checkpoint = {
-                    "net": agent.state_dict(),
+                    "net": student.state_dict(),
                     "optimizer": optimizer.state_dict(),
                     "global_step": global_step
                     }
@@ -705,7 +734,7 @@ for update in range(1, num_updates+1):
         writer.add_scalar("debug/pg_stop_iter", i_epoch_pi, global_step)
 
 checkpoint = {
-        "net": agent.state_dict(),
+        "net": student.state_dict(),
         "optimizer": optimizer.state_dict(),
         "global_step": global_step
         }
