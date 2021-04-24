@@ -612,6 +612,7 @@ for update in range(1, num_updates+1):
         next_obs, rs, ds, infos = envs.step(action)
         rewards[step], next_done = rs.view(-1), torch.Tensor(ds).to(device)
 
+
         for info in infos:
             if 'episode' in info.keys():
                 print(f"global_step={global_step}, episode_reward={info['episode']['r']}")
@@ -725,10 +726,10 @@ for update in range(1, num_updates+1):
 
     # TRY NOT TO MODIFY: record rewards for plotting purposes
     writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]['lr'], global_step)
-    writer.add_scalar("losses/value_loss", v_loss.item(), global_step)
+    writer.add_scalar("losses/feature_loss", feature_loss.item(), global_step)
     writer.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
     writer.add_scalar("losses/entropy", entropy.mean().item(), global_step)
-    writer.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
+    # writer.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
     if args.kle_stop or args.kle_rollback:
         writer.add_scalar("debug/pg_stop_iter", i_epoch_pi, global_step)
 
