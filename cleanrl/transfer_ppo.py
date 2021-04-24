@@ -369,6 +369,8 @@ if __name__ == "__main__":
                         help="coefficient of the entropy")
     parser.add_argument('--vf-coef', type=float, default=0.5,
                         help="coefficient of the value function")
+    parser.add_argument('--fea-coef', type=float, default=0.2,
+                        help="coefficient of the feature loss")
     parser.add_argument('--max-grad-norm', type=float, default=0.5,
                         help='the maximum norm for the gradient clipping')
     parser.add_argument('--clip-coef', type=float, default=0.1,
@@ -506,7 +508,8 @@ class Teacher(nn.Module):
         return action, probs.log_prob(action), probs.entropy()
 
     def get_value(self, x):
-        return self.critic(self.forward(x))
+        hidden = self.forward(x)
+        return self.critic(hidden), hidden
 
 class Student(nn.Module):
     def __init__(self, envs, frames=4):
@@ -523,6 +526,7 @@ class Student(nn.Module):
             layer_init(nn.Linear(3136, 512)),
             nn.ReLU()
         )
+        self.fc = layer_init(nn.Linear(512, 512))
         self.actor = layer_init(nn.Linear(512, envs.action_space.n), std=0.01)
         # self.critic = layer_init(nn.Linear(512, 1), std=1)
 
@@ -530,11 +534,13 @@ class Student(nn.Module):
         return self.network(x)
 
     def get_action(self, x, action=None):
-        logits = self.actor(self.forward(x))
+        x = self.forward(x)
+        hidden = self.fc(x)
+        logits = self.actor(x)
         probs = Categorical(logits=logits)
         if action is None:
             action = probs.sample()
-        return action, probs.log_prob(action), probs.entropy()
+        return action, probs.log_prob(action), probs.entropy(), hidden
 
     # def get_value(self, x):
     #     return self.critic(self.forward(x))
@@ -545,6 +551,7 @@ teacher.load_state_dict(source_model)
 
 student = Student(envs).to(device)
 optimizer = optim.Adam(student.parameters(), lr=args.learning_rate, eps=1e-5)
+loss_fn = torch.nn.MSELoss()
 if args.anneal_lr:
     # https://github.com/openai/baselines/blob/ea25b9e8b234e6ee1bca43083f8f3cf974143998/baselines/ppo2/defaults.py#L20
     lr = lambda f: f * args.learning_rate
@@ -595,8 +602,8 @@ for update in range(1, num_updates+1):
         # ALGO LOGIC: put action logic here
         with torch.no_grad():
             # values[step] = student.get_value(obs[step]).flatten()
-            values[step] = teacher.get_value(obs[step]).flatten()
-            action, logproba, _ = student.get_action(obs[step])
+            values[step] = teacher.get_value(obs[step])[0].flatten()
+            action, logproba, _, _ = student.get_action(obs[step])
 
         actions[step] = action
         logprobs[step] = logproba
@@ -627,7 +634,7 @@ for update in range(1, num_updates+1):
 
     # bootstrap reward if not done. reached the batch limit
     with torch.no_grad():
-        last_value = teacher.get_value(next_obs.to(device)).reshape(1, -1)
+        last_value = teacher.get_value(next_obs.to(device))[0].reshape(1, -1)
         if args.gae:
             advantages = torch.zeros_like(rewards).to(device)
             lastgaelam = 0
@@ -675,7 +682,7 @@ for update in range(1, num_updates+1):
             if args.norm_adv:
                 mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
 
-            _, newlogproba, entropy = student.get_action(b_obs[minibatch_ind], b_actions.long()[minibatch_ind])
+            _, newlogproba, entropy, hidden_student = student.get_action(b_obs[minibatch_ind], b_actions.long()[minibatch_ind])
             ratio = (newlogproba - b_logprobs[minibatch_ind]).exp()
 
             # Stats
@@ -687,19 +694,11 @@ for update in range(1, num_updates+1):
             pg_loss = torch.max(pg_loss1, pg_loss2).mean()
             entropy_loss = entropy.mean()
 
-            # Value loss
-            # new_values = student.get_value(b_obs[minibatch_ind]).view(-1)
-            # if args.clip_vloss:
-            #     v_loss_unclipped = ((new_values - b_returns[minibatch_ind]) ** 2)
-            #     v_clipped = b_values[minibatch_ind] + torch.clamp(new_values - b_values[minibatch_ind], -args.clip_coef, args.clip_coef)
-            #     v_loss_clipped = (v_clipped - b_returns[minibatch_ind])**2
-            #     v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
-            #     v_loss = 0.5 * v_loss_max.mean()
-            # else:
-            #     v_loss = 0.5 * ((new_values - b_returns[minibatch_ind]) ** 2).mean()
+            # feature loss
+            _, hidden_teacher = teacher.get_value(b_obs[minibatch_ind])
+            feature_loss = loss_fn(hidden_student, hidden_teacher)
 
-            # loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
-            loss = pg_loss - args.ent_coef * entropy_loss
+            loss = pg_loss - args.ent_coef * entropy_loss + args.fea_coef * feature_loss
             optimizer.zero_grad()
             loss.backward()
             nn.utils.clip_grad_norm_(student.parameters(), args.max_grad_norm)
