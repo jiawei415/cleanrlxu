@@ -503,7 +503,10 @@ print(f"net:\n", agent)
 
 ckpt = args.ckpt
 if ckpt:
-    ckpt_load_path = f"results/{game_name}_ppo_{ckpt}/checkpoints/best_ckpt.pkl"
+    if ':' in ckpt:
+        ckpt_load_path = f"results/{game_name}_ppo_{ckpt.split(':')[0]}/checkpoints/ckpt_{ckpt.split(':')[1]}.pkl"
+    else:
+        ckpt_load_path = f"results/{game_name}_ppo_{ckpt}/checkpoints/best_ckpt.pkl"
     with open(ckpt_load_path, 'rb') as f:
         checkpoint = pickle.load(f)
     # ckpt_load_path = f"results/{game_name}_ppo_{ckpt}/checkponits/best_ckpt.pth"
@@ -522,8 +525,6 @@ dones = torch.zeros((args.num_steps, args.num_envs)).to(device)
 values = torch.zeros((args.num_steps, args.num_envs)).to(device)
 
 # TRY NOT TO MODIFY: start the game
-# Note how `next_obs` and `next_done` are used; their usage is equivalent to
-# https://github.com/ikostrikov/pytorch-a2c-ppo-acktr-gail/blob/84a7582477fb0d5c82ad6d850fe476829dddd2e1/a2c_ppo_acktr/storage.py#L60
 for i in range(30):
     next_obs = envs.reset()
     done = False
@@ -537,9 +538,6 @@ for i in range(30):
             action, logproba, _ = agent.get_action(obs)
         next_obs, reward, done, infos = envs.step(action)
         total_reward += reward
-
-
     print(f"i: {i}. total_step: {step}. total_reward: {total_reward}")
-
 
 envs.close()
