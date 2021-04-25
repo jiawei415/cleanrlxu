@@ -322,6 +322,7 @@ import time
 import random
 import pickle
 import os
+import math
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnvWrapper
 
 if __name__ == "__main__":
@@ -329,7 +330,7 @@ if __name__ == "__main__":
     # Common arguments
     parser.add_argument('--exp-name', type=str, default=os.path.basename(__file__).rstrip(".py"),
                         help='the name of this experiment')
-    parser.add_argument('--gym-id', type=str, default="Breakout",
+    parser.add_argument('--gym-id', type=str, default="Pong",
                         help='the id of the gym environment')
     parser.add_argument('--learning-rate', type=float, default=2.5e-4, # 0.00025
                         help='the learning rate of the optimizer')
@@ -419,7 +420,7 @@ class VecPyTorch(VecEnvWrapper):
 now_time = time.strftime("%Y%m%d%H%M%S", time.localtime())
 game_name = args.gym_id + "NoFrameskip-v4"
 print(f"play game: {game_name}")
-experiment_name = f"{game_name}_ppo_{now_time}"
+experiment_name = f"{game_name}_mppo_{now_time}"
 writer = SummaryWriter(f"results/{experiment_name}/logs")
 writer.add_text('hyperparameters', "|param|value|\n|-|-|\n%s" % (
         '\n'.join([f"|{key}|{value}|" for key, value in vars(args).items()])))
@@ -500,30 +501,28 @@ class Agent(nn.Module):
         # self.actor = layer_init(nn.Linear(512, envs.action_space.n), std=0.01)
         self.actor = layer_init(nn.Linear(512, 18), std=0.01)
         self.critic = layer_init(nn.Linear(512, 1), std=1)
-        self.mask = [1] * envs.action_space.n + [0] * (18 - envs.action_space.n)
-        self.va = np.array(self.mask)
-
-    def forward(self, x):
-        return self.network(x)
-
+        self.n = envs.action_space.n
+    
     def get_action(self, x, action=None):
         x = self.network(x)
-        logits = self.actor(x)
-        pi = self.get_pi(self.va, logits, 1e-6)
-        if action is None:
-            action = np.random.choice(np.range(len(pi)), p=pi)
-            # action = probs.sample()
-        logp = torch.log(pi.gather(1, action.unsqueeze(1).long())).squeeze(1)
-        entropy = torch.sum(pi * self.va * torch.log(pi), dim=1)
-
+        logits = self.actor(x)[:, : self.n]
         probs = Categorical(logits=logits)
-        a = probs.log_prob(action)
-        b = probs.entropy()
+        if action is None:
+            action = probs.sample()
+        logp = probs.log_prob(action)
+        entropy = probs.entropy()
 
-        return action, a, b
+        # pi = self.gen_pi(self.va, logits, 1e-6)
+        # if action is None:
+        #     action = np.random.choice(np.arange(len(pi)), p=pi)    
+        # logp = torch.log(pi.gather(1, action.unsqueeze(1).long())).squeeze(1)
+        # entropy = torch.sum(pi * self.va * torch.log(pi), dim=1)
+
+        return action, logp, entropy
 
     def get_value(self, x):
-        return self.critic(self.forward(x))
+        x = self.network(x)
+        return self.critic(x)
 
     def gen_pi(self, va, logits, min_prob):
         ceil = math.pow(10.0, 20)
@@ -548,7 +547,7 @@ if args.anneal_lr:
 global_step = 0
 ckpt = args.ckpt
 if ckpt:
-    ckpt_load_path = f"results/{game_name}_ppo_{ckpt}/checkpoints/best_ckpt.pkl"
+    ckpt_load_path = f"results/{game_name}_mppo_{ckpt}/checkpoints/best_ckpt.pkl"
     with open(ckpt_load_path, 'rb') as f:
         checkpoint = pickle.load(f)
     print(f"load checkpoint path: {ckpt_load_path}")
