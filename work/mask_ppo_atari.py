@@ -502,38 +502,25 @@ class Agent(nn.Module):
         self.actor = layer_init(nn.Linear(512, 18), std=0.01)
         self.critic = layer_init(nn.Linear(512, 1), std=1)
         self.n = envs.action_space.n
-    
+
     def get_action(self, x, action=None):
         x = self.network(x)
-        logits = self.actor(x)[:, : self.n]
-        probs = Categorical(logits=logits)
+        logits = self.actor(x)
         if action is None:
-            action = probs.sample()
+            logits_mask = torch.exp(logits[:, : self.n])
+            ps = logits_mask / torch.sum(logits_mask, keepdim=True, dim=1)
+            action = [np.random.choice(np.arange(self.n), p=p.numpy()) for p in ps]
+            action = torch.tensor(action)
+        probs = Categorical(logits=logits)
+        # if action is None:
+        #     action = probs.sample()
         logp = probs.log_prob(action)
         entropy = probs.entropy()
-
-        # pi = self.gen_pi(self.va, logits, 1e-6)
-        # if action is None:
-        #     action = np.random.choice(np.arange(len(pi)), p=pi)    
-        # logp = torch.log(pi.gather(1, action.unsqueeze(1).long())).squeeze(1)
-        # entropy = torch.sum(pi * self.va * torch.log(pi), dim=1)
-
         return action, logp, entropy
 
     def get_value(self, x):
         x = self.network(x)
         return self.critic(x)
-
-    def gen_pi(self, va, logits, min_prob):
-        ceil = math.pow(10.0, 20)
-        logits = np.where(va, logits, np.full_like(logits, -ceil))
-        logits_max = np.amax(logits)
-        logits = va * (np.exp(logits - logits_max) + min_prob)
-        sum_logits = np.sum(logits)
-        if sum_logits == 0:
-            return np.full_like(logits, 1) / len(logits)
-        pi = logits / sum_logits
-        return pi
 
 
 agent = Agent(envs).to(device)
