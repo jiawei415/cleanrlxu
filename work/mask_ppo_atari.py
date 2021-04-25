@@ -326,7 +326,7 @@ import math
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnvWrapper
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='PPO agent')
+    parser = argparse.ArgumentParser(description='MPPO agent')
     # Common arguments
     parser.add_argument('--exp-name', type=str, default=os.path.basename(__file__).rstrip(".py"),
                         help='the name of this experiment')
@@ -483,6 +483,17 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     torch.nn.init.constant_(layer.bias, bias_const)
     return layer
 
+def gen_pi(logits, min_prob):
+    # ceil = math.pow(10.0, 20)
+    # logits = np.where(va, logits, np.full_like(logits, -ceil))
+    logits_max = np.max(logits, axis=1, keepdims=True)
+    logits = np.exp(logits - logits_max) + min_prob
+    sum_logits = np.sum(logits, axis=1, keepdims=True)
+    if np.any(sum_logits == 0):
+        return np.ones(logits.shape) / len(logits[0])
+    pi = logits / sum_logits
+    return pi
+
 class Agent(nn.Module):
     def __init__(self, envs, frames=4):
         super(Agent, self).__init__()
@@ -507,9 +518,10 @@ class Agent(nn.Module):
         x = self.network(x)
         logits = self.actor(x)
         if action is None:
-            logits_mask = torch.exp(logits[:, : self.n])
-            ps = logits_mask / torch.sum(logits_mask, keepdim=True, dim=1)
-            action = [np.random.choice(np.arange(self.n), p=p.numpy()) for p in ps]
+            # logits_mask = torch.exp(logits[:, : self.n] + 1e-6)
+            # ps = logits_mask / torch.sum(logits_mask, keepdim=True, dim=1)
+            ps = gen_pi(logits[:, : self.n].numpy(), 1e-6)
+            action = [np.random.choice(np.arange(self.n), p=p) for p in ps]
             action = torch.tensor(action)
         probs = Categorical(logits=logits)
         # if action is None:
@@ -521,7 +533,6 @@ class Agent(nn.Module):
     def get_value(self, x):
         x = self.network(x)
         return self.critic(x)
-
 
 agent = Agent(envs).to(device)
 print(f"device: {device}")
