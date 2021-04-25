@@ -426,7 +426,7 @@ source_path = f"results/{source_game}_ppo_{args.source_path}/checkpoints/best_mo
 now_time = time.strftime("%Y%m%d%H%M%S", time.localtime())
 game_name = args.gym_id + "NoFrameskip-v4"
 print(f"play game: {game_name}")
-experiment_name = f"{game_name}_ppo_{now_time}_transfer"
+experiment_name = f"{game_name}_value_{now_time}"
 writer = SummaryWriter(f"results/{experiment_name}/logs")
 writer.add_text('hyperparameters', "|param|value|\n|-|-|\n%s" % (
         '\n'.join([f"|{key}|{value}|" for key, value in vars(args).items()])))
@@ -559,7 +559,7 @@ if args.anneal_lr:
 global_step = 0
 ckpt = args.ckpt
 if ckpt:
-    ckpt_load_path = f"results/{game_name}_ppo_{ckpt}/checkpoints/best_ckpt.pkl"
+    ckpt_load_path = f"results/{game_name}_value_{ckpt}/checkpoints/best_ckpt.pkl"
     with open(ckpt_load_path, 'rb') as f:
         checkpoint = pickle.load(f)
     print(f"load checkpoint path: {ckpt_load_path}")
