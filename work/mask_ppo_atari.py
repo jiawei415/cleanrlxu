@@ -501,19 +501,41 @@ class Agent(nn.Module):
         self.actor = layer_init(nn.Linear(512, 18), std=0.01)
         self.critic = layer_init(nn.Linear(512, 1), std=1)
         self.mask = [1] * envs.action_space.n + [0] * (18 - envs.action_space.n)
+        self.va = np.array(self.mask)
 
     def forward(self, x):
         return self.network(x)
 
     def get_action(self, x, action=None):
-        logits = self.actor(self.forward(x))
-        probs = Categorical(logits=logits)
+        x = self.network(x)
+        logits = self.actor(x)
+        pi = self.get_pi(self.va, logits, 1e-6)
         if action is None:
-            action = probs.sample()
-        return action, probs.log_prob(action), probs.entropy()
+            action = np.random.choice(np.range(len(pi)), p=pi)
+            # action = probs.sample()
+        logp = torch.log(pi.gather(1, action.unsqueeze(1).long())).squeeze(1)
+        entropy = torch.sum(pi * self.va * torch.log(pi), dim=1)
+
+        probs = Categorical(logits=logits)
+        a = probs.log_prob(action)
+        b = probs.entropy()
+
+        return action, a, b
 
     def get_value(self, x):
         return self.critic(self.forward(x))
+
+    def gen_pi(self, va, logits, min_prob):
+        ceil = math.pow(10.0, 20)
+        logits = np.where(va, logits, np.full_like(logits, -ceil))
+        logits_max = np.amax(logits)
+        logits = va * (np.exp(logits - logits_max) + min_prob)
+        sum_logits = np.sum(logits)
+        if sum_logits == 0:
+            return np.full_like(logits, 1) / len(logits)
+        pi = logits / sum_logits
+        return pi
+
 
 agent = Agent(envs).to(device)
 print(f"device: {device}")
