@@ -493,7 +493,12 @@ def gen_pi(logits, min_prob):
     logits = np.exp(logits - logits_max) + min_prob
     sum_logits = np.sum(logits, axis=1, keepdims=True)
     if np.any(sum_logits == 0):
-        return np.ones(logits.shape) / len(logits[0])
+        pi = np.ones(logits.shape)
+        for index in np.where(sum_logits==0)[0]:
+            pi[index] = pi[index] / len(logits[0])
+        for index in np.where(sum_logits!=0)[0]:
+            pi[index] = logits[index] / sum_logits[index]
+        return pi
     pi = logits / sum_logits
     return pi
 
@@ -519,7 +524,7 @@ class Agent(nn.Module):
 
     def get_action(self, x, action=None):
         x = self.network(x)
-        logits = self.actor(x)    
+        logits = self.actor(x)
         probs = Categorical(logits=logits)
         if action is None:
             action = probs.sample()
