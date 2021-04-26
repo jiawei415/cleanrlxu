@@ -500,27 +500,25 @@ def gen_actions(logits, n, min_prob=1e-6):
             pi[index] = logits_mask[index] / sum_logits[index]
         return pi
     pi = logits_mask / sum_logits
-    actions = [np.random.choice(np.arange(n), p=p) for p in pi]
-    actions = torch.tensor(actions)
-    return actions
+    action = [np.random.choice(np.arange(n), p=p) for p in pi]
+    action = torch.tensor(action)
+    return action
 
 
-def gen_logproba(logits, actions, min_prob=1e-6):
-    logits = logits.numpy()
-    logits_max = np.max(logits, axis=1, keepdims=True)
-    logits = np.exp(logits - logits_max) + min_prob
-    sum_logits = np.sum(logits, axis=1, keepdims=True)
-    if np.any(sum_logits == 0):
-        pi = np.ones(logits.shape)
-        for index in np.where(sum_logits==0)[0]:
+def gen_logproba(logits, action, min_prob=1e-6):
+    logits_max = torch.max(logits, 1, True)[0]
+    logits = torch.exp(logits - logits_max) + min_prob
+    sum_logits = torch.sum(logits, dim=1, keepdim=True)[0]
+    if torch.any(sum_logits == 0):
+        pi = torch.ones(logits.shape)
+        for index in torch.where(sum_logits==0)[0]:
             pi[index] = pi[index] / n
-        for index in np.where(sum_logits!=0)[0]:
+        for index in torch.where(sum_logits!=0)[0]:
             pi[index] = logits[index] / sum_logits[index]
         return pi
     pi = logits / sum_logits
-    logproba = torch.log(torch.tensor(pi)[actions])
-    return logproba
-
+    logp = torch.log(pi.gather(1, action.unsqueeze(1))).squeeze(1)
+    return logp, pi
 
 class Agent(nn.Module):
     def __init__(self, envs, frames=4):
@@ -542,7 +540,7 @@ class Agent(nn.Module):
         self.critic = layer_init(nn.Linear(512, 1), std=1)
         self.n = envs.action_space.n
 
-    def get_action(self, x, action=None):
+    def get_action(self, x):
         x = self.network(x)
         logits = self.actor(x)
         return logits
@@ -619,7 +617,7 @@ for update in range(1, num_updates+1):
             logits = agent.get_action(obs[step])
 
         action = gen_actions(logits, n) 
-        logproba = gen_logproba(logits, action)
+        logproba, _ = gen_logproba(logits, action.long())
 
         actions[step] = action
         logprobs[step] = logproba
@@ -698,7 +696,9 @@ for update in range(1, num_updates+1):
             if args.norm_adv:
                 mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
 
-            _, newlogproba, entropy = agent.get_action(b_obs[minibatch_ind], b_actions.long()[minibatch_ind])
+            # _, newlogproba, entropy = agent.get_action(b_obs[minibatch_ind], b_actions.long()[minibatch_ind])
+            b_logits = agent.get_action(b_obs[minibatch_ind])
+            newlogproba, pi = gen_logproba(b_logits, b_actions.long()[minibatch_ind])
             ratio = (newlogproba - b_logprobs[minibatch_ind]).exp()
 
             # Stats
@@ -708,7 +708,11 @@ for update in range(1, num_updates+1):
             pg_loss1 = -mb_advantages * ratio
             pg_loss2 = -mb_advantages * torch.clamp(ratio, 1-args.clip_coef, 1+args.clip_coef)
             pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+
+            # Entropy loss
+            entropy = torch.sum(pi * torch.log(pi), dim=1)
             entropy_loss = entropy.mean()
+            
 
             # Value loss
             new_values = agent.get_value(b_obs[minibatch_ind]).view(-1)
