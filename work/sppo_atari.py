@@ -486,16 +486,41 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     torch.nn.init.constant_(layer.bias, bias_const)
     return layer
 
-def gen_pi(logits, min_prob):
-    # ceil = math.pow(10.0, 20)
-    # logits = np.where(va, logits, np.full_like(logits, -ceil))
+
+def gen_actions(logits, n, min_prob=1e-6):
+    logits_mask = logits[:, :n].numpy()
+    logits_max = np.max(logits_mask, axis=1, keepdims=True)
+    logits_mask = np.exp(logits_mask - logits_max) + min_prob
+    sum_logits = np.sum(logits_mask, axis=1, keepdims=True)
+    if np.any(sum_logits == 0):
+        pi = np.ones(logits_mask.shape)
+        for index in np.where(sum_logits==0)[0]:
+            pi[index] = pi[index] / n
+        for index in np.where(sum_logits!=0)[0]:
+            pi[index] = logits_mask[index] / sum_logits[index]
+        return pi
+    pi = logits_mask / sum_logits
+    actions = [np.random.choice(np.arange(n), p=p) for p in pi]
+    actions = torch.tensor(actions)
+    return actions
+
+
+def gen_logproba(logits, actions, min_prob=1e-6):
+    logits = logits.numpy()
     logits_max = np.max(logits, axis=1, keepdims=True)
     logits = np.exp(logits - logits_max) + min_prob
     sum_logits = np.sum(logits, axis=1, keepdims=True)
     if np.any(sum_logits == 0):
-        return np.ones(logits.shape) / len(logits[0])
+        pi = np.ones(logits.shape)
+        for index in np.where(sum_logits==0)[0]:
+            pi[index] = pi[index] / n
+        for index in np.where(sum_logits!=0)[0]:
+            pi[index] = logits[index] / sum_logits[index]
+        return pi
     pi = logits / sum_logits
-    return pi
+    logproba = torch.log(torch.tensor(pi)[actions])
+    return logproba
+
 
 class Agent(nn.Module):
     def __init__(self, envs, frames=4):
@@ -520,15 +545,16 @@ class Agent(nn.Module):
     def get_action(self, x, action=None):
         x = self.network(x)
         logits = self.actor(x)
-        probs = Categorical(logits=logits)
-        if action is None:
-            action = probs.sample()
-            # ps = gen_pi(logits[:, : self.n].numpy(), 1e-6)
-            # action = [np.random.choice(np.arange(self.n), p=p) for p in ps]
-            # action = torch.tensor(action)
-        logp = probs.log_prob(action)
-        entropy = probs.entropy()
-        return action, logp, entropy
+        return logits
+        # probs = Categorical(logits=logits)
+        # if action is None:
+        #     # action = probs.sample()
+        #     ps = gen_pi(logits[:, : self.n].numpy(), 1e-6)
+        #     action = [np.random.choice(np.arange(self.n), p=p) for p in ps]
+        #     action = torch.tensor(action)
+        # logp = probs.log_prob(action)
+        # entropy = probs.entropy()
+        # return action, logp, entropy
 
     def get_value(self, x):
         x = self.network(x)
@@ -572,6 +598,7 @@ next_done = torch.zeros(args.num_envs).to(device)
 num_updates = args.total_timesteps // args.batch_size
 last_reward = float("-inf")
 training_step = 0
+n = envs.action_space.n
 for update in range(1, num_updates+1):
     # Annealing the rate if instructed to do so.
     if args.anneal_lr:
@@ -588,7 +615,11 @@ for update in range(1, num_updates+1):
         # ALGO LOGIC: put action logic here
         with torch.no_grad():
             values[step] = agent.get_value(obs[step]).flatten()
-            action, logproba, _ = agent.get_action(obs[step])
+            # action, logproba, _ = agent.get_action(obs[step])
+            logits = agent.get_action(obs[step])
+
+        action = gen_actions(logits, n) 
+        logproba = gen_logproba(logits, action)
 
         actions[step] = action
         logprobs[step] = logproba
