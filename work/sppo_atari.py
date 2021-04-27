@@ -205,8 +205,8 @@ class FrameStack(gym.Wrapper):
 
     def step(self, action):
         # TODO froce mask
-        # if action >= self.env.action_space.n:
-        #     action = 0
+        if action >= self.env.action_space.n:
+            action = 0
         ob, reward, done, info = self.env.step(action)
         self.frames.append(ob)
         return self._get_ob(), reward, done, info
@@ -488,19 +488,19 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 
 
 def gen_actions(logits, n, min_prob=1e-6):
-    logits_mask = logits[:, :n].numpy()
+    logits_mask = logits.numpy() # [:, :n].numpy()
     logits_max = np.max(logits_mask, axis=1, keepdims=True)
     logits_mask = np.exp(logits_mask - logits_max) + min_prob
     sum_logits = np.sum(logits_mask, axis=1, keepdims=True)
     if np.any(sum_logits == 0):
         pi = np.ones(logits_mask.shape)
         for index in np.where(sum_logits==0)[0]:
-            pi[index] = pi[index] / n
+            pi[index] = pi[index] / pi.shape[1]
         for index in np.where(sum_logits!=0)[0]:
             pi[index] = logits_mask[index] / sum_logits[index]
         return pi
     pi = logits_mask / sum_logits
-    action = [np.random.choice(np.arange(n), p=p) for p in pi]
+    action = [np.random.choice(np.arange(len(p)), p=p) for p in pi]
     return torch.tensor(action), torch.tensor(pi)
 
 
@@ -511,13 +511,13 @@ def gen_logproba(logits, action, n, min_prob=1e-6):
     if torch.any(sum_logits == 0):
         pi = torch.ones(logits.shape)
         for index in torch.where(sum_logits==0)[0]:
-            pi[index] = pi[index] / n
+            pi[index] = pi[index] / pi.shape[1]
         for index in torch.where(sum_logits!=0)[0]:
             pi[index] = logits[index] / sum_logits[index]
         return pi
     pi = logits / sum_logits
     logp = torch.log(pi.gather(1, action.unsqueeze(1))).squeeze(1)
-    return logp, pi[:, : n]
+    return logp, pi # [:, : n]
 
 class Agent(nn.Module):
     def __init__(self, envs, frames=4):
@@ -615,7 +615,7 @@ for update in range(1, num_updates+1):
             # action, logproba, _ = agent.get_action(obs[step])
             logits = agent.get_action(obs[step])
 
-        action, _ = gen_actions(logits, n) 
+        action, _ = gen_actions(logits, n)
         logproba, _ = gen_logproba(logits, action.long(), n)
 
         actions[step] = action
@@ -711,7 +711,7 @@ for update in range(1, num_updates+1):
             # Entropy loss
             entropy = torch.sum(pi * torch.log(pi), dim=1)
             entropy_loss = entropy.mean()
-            
+
 
             # Value loss
             new_values = agent.get_value(b_obs[minibatch_ind]).view(-1)
