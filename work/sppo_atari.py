@@ -501,11 +501,10 @@ def gen_actions(logits, n, min_prob=1e-6):
         return pi
     pi = logits_mask / sum_logits
     action = [np.random.choice(np.arange(n), p=p) for p in pi]
-    action = torch.tensor(action)
-    return action
+    return torch.tensor(action), torch.tensor(pi)
 
 
-def gen_logproba(logits, action, min_prob=1e-6):
+def gen_logproba(logits, action, n, min_prob=1e-6):
     logits_max = torch.max(logits, 1, True)[0]
     logits = torch.exp(logits - logits_max) + min_prob
     sum_logits = torch.sum(logits, dim=1, keepdim=True)[0]
@@ -518,7 +517,7 @@ def gen_logproba(logits, action, min_prob=1e-6):
         return pi
     pi = logits / sum_logits
     logp = torch.log(pi.gather(1, action.unsqueeze(1))).squeeze(1)
-    return logp, pi
+    return logp, pi[:, : n]
 
 class Agent(nn.Module):
     def __init__(self, envs, frames=4):
@@ -616,8 +615,8 @@ for update in range(1, num_updates+1):
             # action, logproba, _ = agent.get_action(obs[step])
             logits = agent.get_action(obs[step])
 
-        action = gen_actions(logits, n) 
-        logproba, _ = gen_logproba(logits, action.long())
+        action, _ = gen_actions(logits, n) 
+        logproba, _ = gen_logproba(logits, action.long(), n)
 
         actions[step] = action
         logprobs[step] = logproba
@@ -698,7 +697,7 @@ for update in range(1, num_updates+1):
 
             # _, newlogproba, entropy = agent.get_action(b_obs[minibatch_ind], b_actions.long()[minibatch_ind])
             b_logits = agent.get_action(b_obs[minibatch_ind])
-            newlogproba, pi = gen_logproba(b_logits, b_actions.long()[minibatch_ind])
+            newlogproba, pi = gen_logproba(b_logits, b_actions.long()[minibatch_ind], n)
             ratio = (newlogproba - b_logprobs[minibatch_ind]).exp()
 
             # Stats
