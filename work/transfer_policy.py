@@ -204,6 +204,8 @@ class FrameStack(gym.Wrapper):
         return self._get_ob()
 
     def step(self, action):
+        if action >= self.env.action_space.n:
+            action = 0
         ob, reward, done, info = self.env.step(action)
         self.frames.append(ob)
         return self._get_ob(), reward, done, info
@@ -514,15 +516,9 @@ class Teacher(nn.Module):
     def get_action(self, x, action=None):
         x = self.network(x)
         logits = self.actor(x)
-        if action is None:
-            # logits_mask = torch.exp(logits[:, : self.n])
-            # ps = logits_mask / torch.sum(logits_mask, keepdim=True, dim=1)
-            ps = gen_pi(logits[:, : self.n].numpy(), 1e-6)
-            action = [np.random.choice(np.arange(self.n), p=p) for p in ps]
-            action = torch.tensor(action)
         probs = Categorical(logits=logits)
-        # if action is None:
-        #     action = probs.sample()
+        if action is None:
+            action = probs.sample()
         logp = probs.log_prob(action)
         entropy = probs.entropy()
         return action, logp, entropy, x
@@ -557,15 +553,9 @@ class Student(nn.Module):
         x = self.network(x)
         hidden = self.fc(x)
         logits = self.actor(x)
-        if action is None:
-            # logits_mask = torch.exp(logits[:, : self.n])
-            # ps = logits_mask / torch.sum(logits_mask, keepdim=True, dim=1)
-            ps = gen_pi(logits[:, : self.n].numpy(), 1e-6)
-            action = [np.random.choice(np.arange(self.n), p=p) for p in ps]
-            action = torch.tensor(action)
         probs = Categorical(logits=logits)
-        # if action is None:
-        #     action = probs.sample()
+        if action is None:
+            action = probs.sample()
         logp = probs.log_prob(action)
         entropy = probs.entropy()
         return action, logp, entropy, hidden
