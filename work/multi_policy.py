@@ -586,7 +586,7 @@ teacher_logprobs = torch.zeros((args.num_steps, args.num_envs)).to(device)
 next_obs = envs.reset()
 next_done = torch.zeros(args.num_envs).to(device)
 num_updates = args.total_timesteps // args.batch_size
-last_reward = float("-inf")
+last_reward = [float("-inf")] * args.num_envs
 training_step = 0
 for update in range(1, num_updates+1):
     # Annealing the rate if instructed to do so.
@@ -602,31 +602,30 @@ for update in range(1, num_updates+1):
             action, _, _, _ = student.get_action(obs[step])
             teacher_action = [teacher[i].get_action(obs[step][i].unsqueeze(dim=0))[0] for i in range(args.num_envs)]
             teacher_logprob = [teacher[i].get_action(obs[step][i].unsqueeze(dim=0))[1] for i in range(args.num_envs)]
-            # for i in range(args.num_envs):
-            #     teacher_action.append(teacher.get_action(obs[step][i].unsqueeze(dim=0))[0])
         actions[step] = action
         teacher_actions[step] = torch.cat(teacher_action)
         teacher_logprobs[step] = torch.cat(teacher_logprob)
         next_obs, rs, ds, infos = envs.step(action)
 
-        for info in infos:
+        for i, info in enumerate(infos):
             if 'episode' in info.keys():
-                print(f"global_step={global_step}, episode_reward={info['episode']['r']}")
+                game_name = envs_name[i]
                 episode_reward = info['episode']['r']
-                if episode_reward > last_reward:
+                print(f"game: {game_name}, global_step: {global_step}, episode_reward: {episode_reward}")
+                if episode_reward > last_reward[i]:
                     checkpoint = {
                             "net": student.state_dict(),
                             "optimizer": optimizer.state_dict(),
                             "global_step": global_step
                             }
-                    with open(ckpt_save_path + "/best_ckpt.pkl", 'wb') as f:
+                    with open(ckpt_save_path + f"/best_ckpt_{game_name}.pkl", 'wb') as f:
                         pickle.dump(checkpoint, f)
                     f.close()
-                    torch.save(checkpoint['net'], ckpt_save_path + f"/best_model.pt")
+                    torch.save(checkpoint['net'], ckpt_save_path + f"/best_model_{game_name}.pt")
                     print(f"save best checkpoint!")
-                    print(f'last_reward: {last_reward}, episode_reward: {episode_reward}')
-                    last_reward = episode_reward
-                writer.add_scalar("charts/episode_reward", info['episode']['r'], global_step)
+                    print(f'game: {game_name}, last_reward: {last_reward[i]}, episode_reward: {episode_reward}')
+                    last_reward[i] = episode_reward
+                writer.add_scalar(f"charts/episode_reward/{game_name}", episode_reward, global_step)
                 # break
 
     b_obs = obs.reshape((-1,)+envs.observation_space.shape)
