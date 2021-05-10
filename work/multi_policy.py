@@ -461,7 +461,7 @@ envs_name = args.envs_name # ['Tennis', 'Pong', 'Tennis', 'Pong']
 envs = VecPyTorch(DummyVecEnv([make_env(game_name, args.seed+i, i) for i, game_name in enumerate(envs_name)]), device)
 source_envs = [VecPyTorch(DummyVecEnv([make_env(game_name, args.seed+i, i)]), device) for i, game_name in enumerate(envs_name)]
 source_ckpts = args.envs_ckpt # ['20210510160835', '20210425165437','20210510160835','20210425165437']
-source_paths = [f"results/{game_name}_mppo_{ckpt}/checkpoints/best_model.pt" for game_name, ckpt in zip(envs_name, source_ckpts)]
+source_paths = [f"results/{game_name}NoFrameskip-v4_mppo_{ckpt}/checkpoints/best_model.pt" for game_name, ckpt in zip(envs_name, source_ckpts)]
 assert isinstance(envs.action_space, Discrete), "only discrete action space is supported"
 print(f"envs name: {envs_name}")
 
@@ -627,7 +627,7 @@ for update in range(1, num_updates+1):
                     print(f'last_reward: {last_reward}, episode_reward: {episode_reward}')
                     last_reward = episode_reward
                 writer.add_scalar("charts/episode_reward", info['episode']['r'], global_step)
-                break
+                # break
 
     b_obs = obs.reshape((-1,)+envs.observation_space.shape)
     b_actions = actions.reshape((-1,))
@@ -642,7 +642,7 @@ for update in range(1, num_updates+1):
             end = start + args.minibatch_size
             minibatch_ind = inds[start:end]
             _, studentlogproba, entropy, hidden_student = student.get_action(b_obs[minibatch_ind], b_actions.long()[minibatch_ind])
-            
+
             # Policy loss
             # entropy_loss = entropy.mean()
             pg_loss = torch.exp(b_teacher_logprobs[minibatch_ind]) * studentlogproba
