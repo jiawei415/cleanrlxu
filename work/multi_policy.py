@@ -528,7 +528,9 @@ class Student(nn.Module):
             layer_init(nn.Conv2d(64, 64, 3, stride=1)),
             nn.ReLU(),
             nn.Flatten(),
-            layer_init(nn.Linear(3136, 512)),
+            layer_init(nn.Linear(3136, 1024)),
+            nn.ReLU(),
+            layer_init(nn.Linear(1024, 512)),
             nn.ReLU()
         )
         # self.actor = layer_init(nn.Linear(512, envs.action_space.n), std=0.01)
